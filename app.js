@@ -34,15 +34,60 @@ async function api(conn, path, params) {
   return r.json();
 }
 
+/* One token, renewed when the server rejects it.
+ *
+ * A scan of a single day is ninety-odd requests and will outlive a token. The
+ * old code refreshed every twentieth request and hoped; this waits to be told.
+ * The renewal is shared, so a burst of parallel requests that all get a 401
+ * opens one handshake between them rather than one each. */
+let liveConn = null, renewing = null;
+
+async function token(force) {
+  if (force) liveConn = null;
+  if (liveConn) return liveConn;
+  renewing ??= connect()
+    .then((c) => { liveConn = c; renewing = null; return c; })
+    .catch((e) => { renewing = null; throw e; });
+  return renewing;
+}
+
+/* Windows are independent of each other, so they can be in flight together. A
+ * handful at a time turns a day's scan from minutes into seconds; more than a
+ * handful would be leaning on somebody else's public widget backend, which is
+ * not ours to spend. */
+const PARALLEL = 5;
+
+async function pool(items, worker) {
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(PARALLEL, items.length) }, async () => {
+      for (let i = next++; i < items.length; i = next++) await worker(items[i], i);
+    }),
+  );
+}
+
 const getRecords = (conn, p) =>
   api(conn, "besttimes/records", {
     locale: "cs", rscId: p.rscId, scgId: p.scgId || "",
     startDate: p.from, endDate: p.to, maxResult: String(p.max || 200),
   }).then((d) => d.records || []);
 
+// One window, with a single retry after the token has been renewed.
+async function records(p) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try { return await getRecords(await token(attempt > 0), p); }
+    catch (e) { if (attempt || !/401|vypršel/i.test(e.message)) throw e; }
+  }
+  return [];
+}
+
 /* ------------------------------- utils ------------------------------- */
 
-const iso = (d) => d.toISOString().slice(0, 10);
+// Local, not toISOString(): that converts to UTC first, so an evening in CEST
+// comes out as the day before once the clock passes 22:00.
+const pad = (n) => String(n).padStart(2, "0");
+const iso = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const stamp = (d) => `${iso(d)}T${pad(d.getHours())}:${pad(d.getMinutes())}:00`;
 const shiftDays = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return iso(d); };
 const startOfMonth = () => { const d = new Date(); d.setDate(1); return iso(d); };
 const startOfYear = () => new Date().getFullYear() + "-01-01";
@@ -52,7 +97,6 @@ const mondayThisWeek = () => {
   d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
   return iso(d);
 };
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // "16.341" -> 16.341 ; "1:00.796" -> 60.796
 function toSeconds(s) {
@@ -67,7 +111,30 @@ function czDate(s) {
     String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
 }
 
+// The track is open roughly 10:00-22:00; the hour either side is slack, so a
+// heat that started early or ran long is still inside a window. Everything
+// outside is closed and asking about it is a request spent on nothing.
+const OPEN_FROM = 9;
+const OPEN_TO = 23;
+// Under the length of a heat, so two heats never land in one window. The API
+// answers with one best time per participant per window, and a window holding
+// two heats reports the better of them and silently drops the other.
+const HEAT_MINUTES = 9;
+
+function heatWindows(from, to) {
+  const out = [];
+  const end = new Date(to + "T00:00:00");
+  for (const d = new Date(from + "T00:00:00"); d <= end; d.setDate(d.getDate() + 1)) {
+    for (let m = OPEN_FROM * 60; m < OPEN_TO * 60; m += HEAT_MINUTES) {
+      const a = new Date(d); a.setHours(0, m, 0, 0);
+      out.push({ from: stamp(a), to: stamp(new Date(+a + HEAT_MINUTES * 60000)) });
+    }
+  }
+  return out;
+}
+
 function buckets(from, to, size) {
+  if (size === "heat") return heatWindows(from, to);
   const out = []; const end = new Date(to); let cur = new Date(from);
   while (cur <= end) {
     const next = new Date(cur);
@@ -80,18 +147,64 @@ function buckets(from, to, size) {
   return out;
 }
 
+/* Who you actually came with.
+ *
+ * There is no account and no server, so "our group" cannot be anything but a
+ * list this browser remembers. Names are the only handle the API gives — they
+ * are registration nicknames, stable enough for an evening and for a season of
+ * driving with the same people.
+ */
+const FAVS = "praga.favs";
+
+function favs() {
+  try { return new Set(JSON.parse(localStorage.getItem(FAVS) || "[]")); }
+  catch { return new Set(); }
+}
+
+function toggleFav(name) {
+  const set = favs(), k = (name || "").toLowerCase();
+  if (!k) return;
+  set.has(k) ? set.delete(k) : set.add(k);
+  try { localStorage.setItem(FAVS, JSON.stringify([...set])); } catch { /* private mode */ }
+}
+
+const isFav = (set, name) => set.has((name || "").toLowerCase());
+
+const escaped = (t) => { const d = document.createElement("div"); d.textContent = t || ""; return d.innerHTML; };
+
 function renderList(el, rows, highlight) {
-  if (!rows.length) { el.innerHTML = '<div class="empty">Nic tu není. Zkus širší rozsah.</div>'; return; }
+  const set = favs();
+  if (el.dataset.favOnly === "1") rows = rows.filter((r) => isFav(set, r.participant));
+  if (!rows.length) {
+    el.innerHTML = `<div class="empty">${el.dataset.favOnly === "1"
+      ? "Nikdo z oblíbených tu není. Označ lidi hvězdičkou v seznamu."
+      : "Nic tu není. Zkus širší rozsah."}</div>`;
+    return;
+  }
   el.innerHTML = rows.map((r, i) => {
-    const rank = highlight ? i + 1 : (r.position ?? i + 1);
-    const div = document.createElement("div");
-    div.textContent = r.participant || "";
+    // Ranking within a filtered list is renumbered, so a starred group reads
+    // as its own leaderboard rather than as gaps in somebody else's.
+    const rank = highlight || el.dataset.favOnly === "1" ? i + 1 : (r.position ?? i + 1);
+    const on = isFav(set, r.participant);
     return `<div class="rec" data-top="${rank === 1 ? 1 : 0}">
       <span class="pos">${rank}</span>
-      <span class="who" ${highlight ? 'style="color:var(--accent)"' : ""}>${div.innerHTML}</span>
+      <button class="star" data-fav="${escaped(r.participant)}" data-on="${on ? 1 : 0}"
+        title="Oblíbený">${on ? "★" : "☆"}</button>
+      <span class="who" ${highlight ? 'style="color:var(--accent)"' : ""}>${escaped(r.participant)}</span>
       <span class="when">${czDate(r.date)}</span>
       <span class="score">${r.score}</span></div>`;
   }).join("");
+}
+
+// One handler per list rather than one per row: the lists are rebuilt on every
+// repaint and per-row listeners would leak with them.
+function wireStars(el, repaint) {
+  el.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-fav]");
+    if (!b) return;
+    toggleFav(b.dataset.fav);
+    repaint();
+  });
 }
 
 function trend(el, pts) {
@@ -165,8 +278,9 @@ const PRESETS = [
   ["Měsíc", startOfMonth], ["Rok", startOfYear], ["Vše", () => "2000-01-01"],
 ];
 
+const PRESET_DEFAULT = "Dnes";
 $("presets").innerHTML = PRESETS.map(([l], i) =>
-  `<button class="chip" data-p="${i}" data-on="${l === "Měsíc" ? 1 : 0}">${l}</button>`).join("");
+  `<button class="chip" data-p="${i}" data-on="${l === PRESET_DEFAULT ? 1 : 0}">${l}</button>`).join("");
 
 $("presets").onclick = (e) => {
   const b = e.target.closest("[data-p]"); if (!b) return;
@@ -176,16 +290,18 @@ $("presets").onclick = (e) => {
   loadBest();
 };
 
+// Kept so starring somebody can repaint the list without asking again.
+let bestRows = [];
+
 async function loadBest() {
   show($("bErr"), false);
   $("bList").innerHTML = '<div class="empty">Načítám…</div>';
   try {
-    const conn = await connect();
-    const rows = await getRecords(conn, {
+    bestRows = await records({
       rscId: state.rscId, scgId: state.scgId,
       from: $("bFrom").value, to: $("bTo").value, max: +$("bMax").value || 100,
     });
-    renderList($("bList"), rows, false);
+    renderList($("bList"), bestRows, false);
   } catch (e) {
     $("bList").innerHTML = "";
     $("bErr").textContent = e.message;
@@ -193,13 +309,24 @@ async function loadBest() {
   }
 }
 
+wireStars($("bList"), () => renderList($("bList"), bestRows, false));
+
+$("bFav").onclick = () => {
+  const el = $("bList");
+  const on = el.dataset.favOnly !== "1";
+  el.dataset.favOnly = on ? "1" : "0";
+  $("bFav").dataset.on = on ? "1" : "0";
+  renderList(el, bestRows, false);
+};
+
 /* ---------------------------- driver hunt ---------------------------- */
 
-const SIZES = [["day", "Po dnech"], ["week", "Po týdnech"], ["month", "Po měsících"]];
-$("dSize").innerHTML = SIZES.map(([v, l], i) =>
-  `<button class="chip" data-s="${v}" data-on="${i === 1 ? 1 : 0}">${l}</button>`).join("");
-
-let dGranularity = "week";
+const SIZES = [
+  ["heat", "Po jízdách"], ["day", "Po dnech"], ["week", "Po týdnech"], ["month", "Po měsících"],
+];
+let dGranularity = "day";
+$("dSize").innerHTML = SIZES.map(([v, l]) =>
+  `<button class="chip" data-s="${v}" data-on="${v === dGranularity ? 1 : 0}">${l}</button>`).join("");
 $("dSize").onclick = (e) => {
   const b = e.target.closest("[data-s]"); if (!b) return;
   dGranularity = b.dataset.s;
@@ -209,13 +336,18 @@ $("dSize").onclick = (e) => {
 
 function updateHint() {
   const n = buckets($("dFrom").value, $("dTo").value, dGranularity).length;
+  const heat = dGranularity === "heat"
+    ? ` Po jízdách se ptá jen na otevírací dobu (${OPEN_FROM}–${OPEN_TO} h), po ${HEAT_MINUTES} minutách.`
+    : "";
   $("dHint").textContent =
-    `API vrací jeden nejlepší čas na jezdce za dotázané okno, takže jemnější dělení znamená hustší historii a víc dotazů. Teď ${n}.`;
+    `API vrací jeden nejlepší čas na jezdce za dotázané okno, takže jemnější dělení znamená hustší historii a víc dotazů.` +
+    ` Teď ${n}, po ${PARALLEL} současně.${heat}`;
   return n;
 }
 ["dFrom", "dTo"].forEach(id => $(id).addEventListener("change", updateHint));
 
 let scanRun = 0;
+let dFound = [];
 
 function idleScanButton() {
   $("dGo").dataset.running = "0";
@@ -233,8 +365,10 @@ $("dGo").onclick = async () => {
   if (!needle) { $("dErr").textContent = "Napiš aspoň část jména."; return show($("dErr"), true); }
 
   const wins = buckets($("dFrom").value, $("dTo").value, dGranularity);
-  if (wins.length > 400) {
-    $("dErr").textContent = "Přes 400 kroků. Zvol hrubší dělení nebo kratší rozsah.";
+  // Raised now that windows go out in parallel: a week by heat is ~660 of them
+  // and finishes in well under a minute.
+  if (wins.length > 1500) {
+    $("dErr").textContent = `Přes 1500 kroků (${wins.length}). Zvol hrubší dělení nebo kratší rozsah.`;
     return show($("dErr"), true);
   }
 
@@ -244,20 +378,24 @@ $("dGo").onclick = async () => {
   $("dTrend").innerHTML = "";
   $("dList").innerHTML = "";
 
-  const found = [];
+  const found = dFound = [];
   const seen = new Set(); // consecutive windows share an edge day, so drop repeats
 
+  let done = 0, failed = 0;
+
   try {
-    let conn = await connect();
-    for (let i = 0; i < wins.length; i++) {
-      if (run !== scanRun) break;
-      $("dGo").textContent = `Zastavit — ${i + 1}/${wins.length}, nalezeno ${found.length}`;
-      // Refresh the token periodically so long scans don't expire mid-run.
-      if (i && i % 20 === 0) conn = await connect();
-      const recs = await getRecords(conn, {
-        rscId: state.rscId, scgId: state.scgId, from: wins[i].from, to: wins[i].to, max: 2000,
-      });
-      if (run !== scanRun) break;
+    // One window failing does not end the scan. Over hundreds of requests a
+    // stray timeout is ordinary, and throwing away everything already found
+    // because of one would be the wrong trade.
+    await pool(wins, async (win) => {
+      if (run !== scanRun) return;
+      let recs;
+      try {
+        recs = await records({
+          rscId: state.rscId, scgId: state.scgId, from: win.from, to: win.to, max: 2000,
+        });
+      } catch { failed++; return; }
+      if (run !== scanRun) return;
 
       let added = 0;
       for (const r of recs) {
@@ -268,15 +406,21 @@ $("dGo").onclick = async () => {
         found.push({ ...r, secs: toSeconds(r.score) });
         added++;
       }
+      $("dGo").textContent = `Zastavit — ${++done}/${wins.length}, nalezeno ${found.length}`;
       // Only repaint when something actually changed, otherwise it flickers.
       if (added) renderList($("dList"), [...found].sort((a, b) => (a.secs ?? 1e9) - (b.secs ?? 1e9)), true);
-      await sleep(180); // be gentle, this is their public widget backend
-    }
+    });
+
+    if (run !== scanRun) return;
 
     trend($("dTrend"), found.filter(f => f.secs != null)
       .sort((a, b) => new Date(a.date) - new Date(b.date)));
     if (!found.length)
       $("dList").innerHTML = '<div class="empty">Nic. Jména jsou přezdívky z registrace, zkus kratší kus.</div>';
+    if (failed) {
+      $("dErr").textContent = `${failed} z ${wins.length} oken se nepodařilo načíst; zbytek je výš.`;
+      show($("dErr"), true);
+    }
   } catch (e) {
     if (run === scanRun) { $("dErr").textContent = e.message; show($("dErr"), true); }
   } finally {
@@ -310,11 +454,15 @@ $("lGo").onclick = async () => {
       const empty = data && Object.keys(data).length === 0;
       $("lNote").textContent = empty ? "Připojeno. Zrovna neběží žádná jízda." : "";
       show($("lNote"), empty);
-      // Message shape is undocumented: show the first array of objects we find.
+      // The shape is undocumented. The old version printed the first five
+      // values of each row, which is why this read as unexplained numbers:
+      // without the field names there was no telling a lap time from a kart
+      // number. Names and values together are at least debuggable at the track.
       const arr = Object.values(data).find(v => Array.isArray(v) && v.length && typeof v[0] === "object");
-      $("lList").innerHTML = !arr ? "" : arr.map(row =>
-        `<div class="rec">` + Object.values(row).slice(0, 5)
-          .map(v => `<span class="who" style="font-family:var(--mono);font-size:13px">${String(v)}</span>`)
+      $("lList").innerHTML = !arr ? "" : arr.map((row) =>
+        `<div class="rec kv">` + Object.entries(row)
+          .filter(([, v]) => v !== null && v !== "" && typeof v !== "object")
+          .map(([k, v]) => `<span class="pair"><b>${escaped(k)}</b>${escaped(String(v))}</span>`)
           .join("") + `</div>`).join("");
     };
     ws.onerror = () => {
@@ -330,6 +478,9 @@ $("lGo").onclick = async () => {
     $("lGo").textContent = "Připojit";
   }
 };
+
+wireStars($("dList"), () =>
+  renderList($("dList"), [...dFound].sort((a, b) => (a.secs ?? 1e9) - (b.secs ?? 1e9)), true));
 
 $("lRaw").onclick = () => {
   const on = $("lDump").classList.contains("hide");
@@ -349,7 +500,9 @@ $("keyApply").onclick = () => {
 $("tabs").onclick = (e) => { const b = e.target.closest("[data-tab]"); if (b) selectTab(b.dataset.tab); };
 $("bGo").onclick = loadBest;
 
-$("bFrom").value = startOfMonth(); $("bTo").value = shiftDays(1);
-$("dFrom").value = startOfYear();  $("dTo").value = shiftDays(1);
+// Today on the leaderboard, this week on the driver page: both are what you
+// want when you have just got off the track, and both are cheap to ask for.
+$("bFrom").value = shiftDays(0);      $("bTo").value = shiftDays(1);
+$("dFrom").value = mondayThisWeek();  $("dTo").value = shiftDays(1);
 updateHint();
 boot();

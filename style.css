@@ -55,6 +55,16 @@
   .score{flex:0 0 auto;font-family:var(--mono);font-size:16px;min-width:72px;text-align:right;
     font-variant-numeric:tabular-nums}
   .rec[data-top="1"] .pos,.rec[data-top="1"] .score{color:var(--gold)}
+  /* Sits between the position and the name, so the column of stars lines up
+     down the list instead of drifting with the length of each nickname. */
+  .star{flex:0 0 auto;background:none;border:none;padding:0 2px;line-height:1;
+    font-size:15px;color:var(--faint)}
+  .star[data-on="1"]{color:var(--gold)}
+  /* Until the message shape is known, a live row is whatever fields came in,
+     wrapped rather than truncated — the point is to read them, not to fit. */
+  .rec.kv{flex-wrap:wrap;gap:6px 10px;align-items:baseline}
+  .pair{font-family:var(--mono);font-size:12px;color:var(--text);white-space:nowrap}
+  .pair b{color:var(--faint);font-weight:400;margin-right:4px}
   .empty{padding:28px 16px;color:var(--dim);font-size:14px}
   pre{background:var(--surface);color:var(--dim);font-family:var(--mono);font-size:11px;
     border-radius:8px;padding:12px;overflow:auto;max-height:320px}
