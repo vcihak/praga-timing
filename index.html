@@ -5,9 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#14161A">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="Mezičas">
+<meta name="apple-mobile-web-app-title" content="Praga">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>Mezičas</title>
+<title>Praga Timing</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2314161A'/%3E%3Cpath d='M16 6a10 10 0 1 0 10 10' fill='none' stroke='%23ED1C24' stroke-width='3' stroke-linecap='round'/%3E%3Ccircle cx='16' cy='16' r='2.5' fill='%23F0B429'/%3E%3C/svg%3E">
 <style>
   :root{
@@ -32,7 +32,7 @@
   nav button{flex:1;background:none;border:none;border-bottom:2px solid transparent;
     color:var(--dim);padding:13px 0;font-size:14px}
   nav button[aria-selected="true"]{color:var(--text);border-bottom-color:var(--accent)}
-  .row{display:flex;gap:8px}
+  .row{display:flex;gap:8px;flex-wrap:wrap}
   .scroll{display:flex;gap:8px;overflow-x:auto;padding:12px 16px;
     scrollbar-width:none}
   .scroll::-webkit-scrollbar{display:none}
@@ -40,11 +40,16 @@
     border-radius:999px;padding:8px 14px;font-size:12px;white-space:nowrap}
   .chip[data-on="1"]{background:var(--accent);border-color:var(--accent);color:#fff}
   .pad{padding:0 16px;display:flex;flex-direction:column;gap:12px}
-  label{display:flex;flex-direction:column;gap:4px;flex:1;min-width:0}
+  label{display:flex;flex-direction:column;gap:4px;flex:1 1 130px;min-width:0}
+  label.narrow{flex:0 1 92px}
   label span{font-size:12px;color:var(--faint)}
   input,select{background:var(--raised);color:var(--text);border:1px solid var(--line);
-    border-radius:8px;padding:10px 12px;font:inherit;width:100%;min-width:0}
-  input[type=date]{min-height:42px}
+    border-radius:8px;padding:10px 12px;font:inherit;width:100%;min-width:0;max-width:100%;
+    -webkit-appearance:none;appearance:none}
+  /* iOS gives date fields an intrinsic width that ignores width:100% and
+     makes them overlap their neighbours, so reset it explicitly. */
+  input[type=date]{min-height:44px;text-align:left;display:block}
+  input[type=date]::-webkit-date-and-time-value{text-align:left;margin:0}
   .go{background:var(--accent);color:#fff;border:none;border-radius:8px;
     padding:13px;font-size:14px;width:100%}
   .go.quiet{background:var(--raised);color:var(--dim);border:1px solid var(--line)}
@@ -53,13 +58,13 @@
   .note.bad{color:var(--accent)}
   .hint{font-size:12px;color:var(--faint);margin:0}
   .list{margin-top:16px;border-top:1px solid var(--line)}
-  .rec{display:flex;align-items:center;gap:12px;padding:9px 16px;
+  .rec{display:flex;align-items:center;gap:8px;padding:9px 16px;
     border-bottom:1px solid var(--line)}
-  .pos{width:32px;text-align:right;font-family:var(--mono);font-size:13px;
+  .pos{width:26px;flex:0 0 auto;text-align:right;font-family:var(--mono);font-size:13px;
     color:var(--faint);font-variant-numeric:tabular-nums}
-  .who{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px}
-  .when{font-size:11px;color:var(--faint);white-space:nowrap}
-  .score{font-family:var(--mono);font-size:16px;min-width:76px;text-align:right;
+  .who{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px}
+  .when{flex:0 0 auto;font-size:11px;color:var(--faint);white-space:nowrap}
+  .score{flex:0 0 auto;font-family:var(--mono);font-size:16px;min-width:72px;text-align:right;
     font-variant-numeric:tabular-nums}
   .rec[data-top="1"] .pos,.rec[data-top="1"] .score{color:var(--gold)}
   .empty{padding:28px 16px;color:var(--dim);font-size:14px}
@@ -105,7 +110,7 @@
       <div class="row">
         <label><span>Od</span><input type="date" id="bFrom"></label>
         <label><span>Do</span><input type="date" id="bTo"></label>
-        <label style="max-width:92px"><span>Počet</span><input type="number" id="bMax" value="100" min="1"></label>
+        <label class="narrow"><span>Počet</span><input type="number" id="bMax" value="100" min="1"></label>
       </div>
       <button class="go" id="bGo">Načíst</button>
       <div class="note bad hide" id="bErr"></div>
@@ -152,6 +157,10 @@
 
 const DEFAULT_KEY = "cHJhZ2FhcmVuYTowN2EzMzc2My0yYjdiLTRhYzktOTgzZS1jZDljMWQzOGRmODU=";
 const HANDSHAKE = "https://backend.sms-timing.com/api/connectioninfo?type=modules";
+
+// Shown in the header. The API only knows the resource as "Karting", which
+// reads oddly as a page title, so name the venue here.
+const VENUE = "Praga Arena";
 
 const $ = (id) => document.getElementById(id);
 const show = (el, on) => el.classList.toggle("hide", !on);
@@ -263,8 +272,8 @@ async function boot() {
     state.resources = await api(conn, "besttimes/resources", { locale: "cs", rscId: "" });
     const r = state.resources[0];
     state.rscId = r.resourceId;
-    $("trackName").textContent = r.name;
-    $("trackSub").textContent = conn.ClientKey + " · okruh " + r.resourceId;
+    $("trackName").textContent = state.key === DEFAULT_KEY ? VENUE : conn.ClientKey;
+    $("trackSub").textContent = r.name + " · okruh " + r.resourceId;
     renderGroups(r.scoregroups || []);
     show($("tabs"), true);
     selectTab(state.tab);
