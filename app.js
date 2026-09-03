@@ -29,8 +29,16 @@ async function connect() {
 async function api(conn, path, params) {
   const q = new URLSearchParams({ ...params, accessToken: conn.AccessToken });
   const r = await fetch(`https://${conn.ServiceAddress}/api/${path}/${conn.ClientKey}?${q}`);
-  if (r.status === 401) throw new Error("Token vypršel — zkus to znovu.");
-  if (!r.ok) throw new Error(path + ": HTTP " + r.status);
+  if (!r.ok) {
+    // The status travels with the error: whether this is worth retrying is a
+    // decision for the caller, and matching on the message text would break
+    // the moment the wording changed.
+    const e = new Error(r.status === 401 || r.status === 403
+      ? "Přihlášení vypršelo — zkouším znovu."
+      : path + ": HTTP " + r.status);
+    e.status = r.status;
+    throw e;
+  }
   return r.json();
 }
 
@@ -40,13 +48,18 @@ async function api(conn, path, params) {
  * old code refreshed every twentieth request and hoped; this waits to be told.
  * The renewal is shared, so a burst of parallel requests that all get a 401
  * opens one handshake between them rather than one each. */
-let liveConn = null, renewing = null;
+let liveConn = null, liveAt = 0, renewing = null;
+
+// Tokens are short-lived and the handshake is one cheap request, so a tab left
+// open overnight renews on its own rather than waiting to be refused. The
+// retry below is the backstop for the token that dies early, not the plan.
+const TOKEN_TTL = 4 * 60 * 1000;
 
 async function token(force) {
-  if (force) liveConn = null;
+  if (force || Date.now() - liveAt > TOKEN_TTL) liveConn = null;
   if (liveConn) return liveConn;
   renewing ??= connect()
-    .then((c) => { liveConn = c; renewing = null; return c; })
+    .then((c) => { liveConn = c; liveAt = Date.now(); renewing = null; return c; })
     .catch((e) => { renewing = null; throw e; });
   return renewing;
 }
@@ -76,7 +89,7 @@ const getRecords = (conn, p) =>
 async function records(p) {
   for (let attempt = 0; attempt < 2; attempt++) {
     try { return await getRecords(await token(attempt > 0), p); }
-    catch (e) { if (attempt || !/401|vypršel/i.test(e.message)) throw e; }
+    catch (e) { if (attempt || (e.status !== 401 && e.status !== 403)) throw e; }
   }
   return [];
 }
@@ -230,7 +243,7 @@ async function boot() {
   $("trackName").textContent = "Načítám";
   $("trackSub").textContent = "…";
   try {
-    const conn = await connect();
+    const conn = await token(true);
     state.resources = await api(conn, "besttimes/resources", { locale: "cs", rscId: "" });
     const r = state.resources[0];
     state.rscId = r.resourceId;
@@ -242,7 +255,9 @@ async function boot() {
   } catch (e) {
     $("trackName").textContent = "Nepřipojeno";
     $("trackSub").textContent = "";
-    $("bootErr").textContent = e.message + " Pokud jde o síťovou chybu, otevři stránku přes https, ne ze souboru.";
+    $("bootErr").textContent = e.message +
+      " Klíč Praga zveřejňuje v odkazu na registraci na pragaarena.cz — vezmi z něj parametr ?key= a vlož ho nahoře pod „klíč“." +
+      " Pokud jde o síťovou chybu, otevři stránku přes https, ne ze souboru.";
     $("bootErr").className = "pad note bad";
     show($("bootErr"), true);
   }

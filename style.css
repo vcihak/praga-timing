@@ -8,6 +8,10 @@
   html,body{margin:0;background:var(--bg);color:var(--text);
     font:15px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;
     -webkit-text-size-adjust:100%}
+  /* Room for the scrollbar whether or not there is one, so the centred column
+     stays put instead of shifting sideways when a short list becomes a long
+     one. */
+  html{scrollbar-gutter:stable}
   .wrap{max-width:680px;margin:0 auto;padding-bottom:64px}
   header{display:flex;align-items:baseline;justify-content:space-between;
     padding:20px 16px 12px;border-bottom:1px solid var(--line)}
