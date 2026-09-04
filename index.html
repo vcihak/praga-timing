@@ -46,7 +46,11 @@
     <div class="pad">
       <div class="row" id="bRange">
         <label><span>Od</span><input type="date" id="bFrom"></label>
+        <label class="narrow tm hide"><span>čas</span>
+          <input id="bFromT" inputmode="numeric" maxlength="5" placeholder="00:00"></label>
         <label><span>Do včetně</span><input type="date" id="bTo"></label>
+        <label class="narrow tm hide"><span>čas</span>
+          <input id="bToT" inputmode="numeric" maxlength="5" placeholder="23:59"></label>
         <label class="narrow"><span>Počet</span><input type="number" id="bMax" value="100" min="1"></label>
       </div>
       <div class="row">

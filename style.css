@@ -2,6 +2,9 @@
     --bg:#14161A; --surface:#1B1E24; --raised:#22262E; --line:#2E333C;
     --text:#E9EBEE; --dim:#8B929C; --faint:#5C636D;
     --accent:#ED1C24; --gold:#F0B429;
+    /* Timing-screen convention: purple the fastest of the session, green a
+       driver's own best, yellow an ordinary lap. */
+    --purple:#B36BF5; --green:#3DD68C; --yellow:#F0B429;
     --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   }
   *{box-sizing:border-box}
@@ -112,8 +115,12 @@
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
 .lrec .gap{grid-column:4;font-size:11px;color:var(--faint);text-align:right;
   font-family:var(--mono);font-variant-numeric:tabular-nums}
-/* The lap just set was this driver's fastest of the heat. */
-.lrec[data-pb="1"] .meta em{color:var(--gold);font-style:normal}
+.lrec .meta em{font-style:normal}
+.lrec[data-last="purple"] .meta em{color:var(--purple)}
+.lrec[data-last="green"]  .meta em{color:var(--green)}
+.lrec[data-last="yellow"] .meta em{color:var(--yellow)}
+.lrec[data-best="purple"] .best{color:var(--purple)}
+.lrec[data-best="green"]  .best{color:var(--green)}
 .lrec[data-fav="1"]{background:#1a1d24}
 .lrec[data-fav="1"] .who{color:var(--accent)}
 .kart{display:inline-block;margin-left:6px;padding:1px 6px;border-radius:999px;

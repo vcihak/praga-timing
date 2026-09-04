@@ -315,33 +315,53 @@ let bestRows = [];
 
 const withTime = () => $("bClock").dataset.on === "1";
 
+/* Our own time field rather than the browser's.
+ *
+ * A datetime-local input is drawn by the browser in the browser's language,
+ * which is not something a page can override — not with lang on the document,
+ * not with lang on the input. On an English-language browser that means AM/PM
+ * and a field too wide for a phone. Four digits and a colon are the same in
+ * every locale.
+ */
+function clockTime(el, fallback) {
+  const digits = (el.value || "").replace(/\D/g, "");
+  if (digits.length < 3) return fallback;
+  const h = Math.min(23, +digits.slice(0, digits.length - 2));
+  const m = Math.min(59, +digits.slice(-2));
+  return pad(h) + ":" + pad(m);
+}
+
+// Tidied when you leave the field, so "2035" and "20.35" both become 20:35.
+for (const id of ["bFromT", "bToT"]) {
+  $(id).addEventListener("blur", () => {
+    if ($(id).value.trim()) $(id).value = clockTime($(id), $(id).placeholder);
+  });
+}
+
 /* "Do" means what it says.
  *
  * The API's endDate is exclusive, which is why this field used to hold
  * tomorrow's date and nobody could tell whether a range included its last day.
- * The field is inclusive now and the exclusive end is worked out here: the day
- * after when there is no time, the minute after when there is.
+ * The field is inclusive now and the exclusive end is worked out here — and
+ * because a day with no time given runs to 23:59, both cases are the same
+ * sum: take the last minute wanted and add one.
  */
 function apiRange() {
-  if (!withTime()) {
-    const end = new Date($("bTo").value + "T00:00:00");
-    end.setDate(end.getDate() + 1);
-    return { from: $("bFrom").value + "T00:00:00", to: stamp(end) };
-  }
-  const end = new Date($("bTo").value);
+  const from = $("bFrom").value + "T" +
+    (withTime() ? clockTime($("bFromT"), "00:00") : "00:00") + ":00";
+  const lastMinute = withTime() ? clockTime($("bToT"), "23:59") : "23:59";
+  const end = new Date($("bTo").value + "T" + lastMinute + ":00");
   end.setMinutes(end.getMinutes() + 1);
-  return { from: stamp(new Date($("bFrom").value)), to: stamp(end) };
+  return { from, to: stamp(end), lastMinute };
 }
 
 // Says out loud what was asked for, because a range with times in it is not
 // something you can read off two input boxes at a glance.
 function describeRange() {
   const r = apiRange();
-  const nice = (t) => t.replace("T", " ").slice(0, withTime() ? 16 : 10);
-  const end = new Date(r.to);
-  end.setMinutes(end.getMinutes() - (withTime() ? 1 : 0));
-  if (!withTime()) end.setDate(end.getDate() - 1);
-  $("bWhat").textContent = `${nice(r.from)} — ${nice(stamp(end))} včetně`;
+  const cz = (d, t) => d.split("-").reverse().map(Number).join(".") + (withTime() ? " " + t : "");
+  $("bWhat").textContent =
+    `${cz($("bFrom").value, r.from.slice(11, 16))} — ${cz($("bTo").value, r.lastMinute)} včetně`;
 }
 
 async function loadBest() {
@@ -362,20 +382,22 @@ async function loadBest() {
   }
 }
 
-/* Switching the two boxes between a day and a moment.
- *
- * Same two fields either way rather than four: a range with times is the rare
- * case, and making it visible all the time would mean typing an hour you do
- * not care about every time you look at a week.
- */
+wireStars($("bList"), () => renderList($("bList"), bestRows, false));
+
+$("bFav").onclick = () => {
+  const el = $("bList");
+  const on = el.dataset.favOnly !== "1";
+  el.dataset.favOnly = on ? "1" : "0";
+  $("bFav").dataset.on = on ? "1" : "0";
+  renderList(el, bestRows, false);
+};
+
+// The time is the rare case, so it stays out of the way until asked for.
 function setClock(on) {
   $("bClock").dataset.on = on ? "1" : "0";
-  $("bRange").classList.toggle("stack", on);
-  for (const id of ["bFrom", "bTo"]) {
-    const el = $(id), day = (el.value || "").slice(0, 10);
-    el.type = on ? "datetime-local" : "date";
-    el.value = on ? day + (id === "bFrom" ? "T00:00" : "T23:59") : day;
-  }
+  for (const el of document.querySelectorAll("#bRange .tm")) show(el, on);
+  if (on && !$("bFromT").value) $("bFromT").value = "00:00";
+  if (on && !$("bToT").value) $("bToT").value = "23:59";
   describeRange();
 }
 
@@ -390,21 +412,23 @@ $("bClock").onclick = () => { setClock(!withTime()); loadBest(); };
  * from the session before can slip in. Better that than missing half a heat.
  */
 const HEAT_ZOOM = 6;
-const localMin = (d) => stamp(d).slice(0, 16);
 
 let rangeBefore = null;
+
+const fields = () => [$("bFrom"), $("bFromT"), $("bTo"), $("bToT")];
 
 function zoomToHeat(when) {
   const t = new Date(when);
   if (isNaN(+t)) return;
   if (!rangeBefore) {
-    rangeBefore = { clock: withTime(), from: $("bFrom").value, to: $("bTo").value };
+    rangeBefore = { clock: withTime(), vals: fields().map((el) => el.value) };
   }
   // No preset describes one heat, so stop claiming one does.
   [...$("presets").children].forEach((c) => (c.dataset.on = "0"));
   setClock(true);
-  $("bFrom").value = localMin(new Date(+t - HEAT_ZOOM * 60000));
-  $("bTo").value = localMin(new Date(+t + HEAT_ZOOM * 60000));
+  const a = new Date(+t - HEAT_ZOOM * 60000), b = new Date(+t + HEAT_ZOOM * 60000);
+  $("bFrom").value = iso(a); $("bFromT").value = stamp(a).slice(11, 16);
+  $("bTo").value = iso(b);   $("bToT").value = stamp(b).slice(11, 16);
   show($("bBack"), true);
   selectTab("best");
   loadBest();
@@ -412,10 +436,9 @@ function zoomToHeat(when) {
 
 $("bBack").onclick = () => {
   if (!rangeBefore) return;
-  // Values after the switch, not before: setClock rewrites them from the day.
+  // Values after the switch: setClock fills empty time fields with defaults.
   setClock(rangeBefore.clock);
-  $("bFrom").value = rangeBefore.from;
-  $("bTo").value = rangeBefore.to;
+  fields().forEach((el, i) => (el.value = rangeBefore.vals[i]));
   rangeBefore = null;
   show($("bBack"), false);
   loadBest();
@@ -427,16 +450,6 @@ for (const id of ["bList", "dList"]) {
     if (b) zoomToHeat(b.dataset.at);
   });
 }
-
-wireStars($("bList"), () => renderList($("bList"), bestRows, false));
-
-$("bFav").onclick = () => {
-  const el = $("bList");
-  const on = el.dataset.favOnly !== "1";
-  el.dataset.favOnly = on ? "1" : "0";
-  $("bFav").dataset.on = on ? "1" : "0";
-  renderList(el, bestRows, false);
-};
 
 /* ---------------------------- driver hunt ---------------------------- */
 
@@ -596,16 +609,34 @@ function renderLive(d) {
   show($("lHead"), true);
 
   const set = favs();
+  // The quickest lap anybody has done in this heat, which is what makes a time
+  // purple rather than merely green.
+  const fastest = Math.min(...drivers.map((r) => r.B || Infinity));
+
   $("lList").innerHTML = drivers.map((r) => {
-    // The lap that just went in was the quickest of their heat. Only from the
-    // second lap on: a first lap is always somebody's best and marking the
-    // whole field gold at the green light says nothing.
-    const pb = r.B && r.T === r.B && r.L > 1;
-    return `<div class="lrec" data-pb="${pb ? 1 : 0}" data-fav="${isFav(set, r.N) ? 1 : 0}">
+    /* Timing-screen colours, as everybody expects them:
+     *   purple  quickest lap of the heat, by anyone
+     *   green   that driver's own best
+     *   yellow  an ordinary lap
+     * Only from the second lap on. A first lap is always its driver's best,
+     * and painting the whole field green at the green light says nothing. */
+    const lastRank = !r.T || r.L < 2 ? ""
+      : r.T === fastest ? "purple"
+      : r.T === r.B ? "green"
+      : "yellow";
+    const bestRank = r.B && r.B === fastest ? "purple" : r.B ? "green" : "";
+    // The feed pads names to a fixed width; two spaces mid-name is not a name.
+    const name = String(r.N || "").replace(/\s+/g, " ").trim();
+    return `<div class="lrec" data-last="${lastRank}" data-best="${bestRank}"
+      data-fav="${isFav(set, name) ? 1 : 0}">
       <span class="pos">${r.P ?? ""}</span>
-      <button class="star" data-fav="${escaped(r.N)}" data-on="${isFav(set, r.N) ? 1 : 0}"
-        title="Oblíbený">${isFav(set, r.N) ? "★" : "☆"}</button>
-      <span class="who">${escaped(r.N)}<span class="kart">${escaped(r.K)}</span></span>
+      <button class="star" data-fav="${escaped(name)}" data-on="${isFav(set, name) ? 1 : 0}"
+        title="Oblíbený">${isFav(set, name) ? "★" : "☆"}</button>
+      <span class="who">${escaped(name)}${
+        // An anonymous driver is named after the kart, so the badge would print
+        // the same number twice.
+        r.K && !name.endsWith(" " + r.K) ? `<span class="kart">${escaped(r.K)}</span>` : ""
+      }</span>
       <span class="best">${lap(r.B)}</span>
       <span class="meta">${r.L ?? 0} kol · posl <em>${lap(r.T)}</em>${
         r.L > 1 ? " · ø " + lap(r.A) : ""}</span>
@@ -642,7 +673,9 @@ $("lGo").onclick = async () => {
       show($("lRaw"), true);
 
       const idle = !data || !Array.isArray(data.D) || !data.D.length;
-      $("lNote").textContent = idle ? (s.translationNoSessionsRunning || "Zrovna nikdo nejede.") : "";
+      // Their own Czech for this is "Žádné závody běžecké" — a machine that read
+      // "running" as jogging. Ours instead.
+      $("lNote").textContent = idle ? "Zrovna nikdo nejede." : "";
       show($("lNote"), idle);
       if (idle) { show($("lHead"), false); $("lList").innerHTML = ""; return; }
       renderLive(data);
