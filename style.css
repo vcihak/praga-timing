@@ -83,3 +83,39 @@
     border-radius:8px;padding:12px;overflow:auto;max-height:320px}
   svg{width:100%;height:104px;display:block}
   .hide{display:none}
+
+/* ------------------------------ live timing ------------------------------ */
+/* Field names come from the module's own settings, so the letters in the feed
+   are not being guessed at: A is Průměr, B Nejlepší, T Poslední, G MEZERA. */
+.heat{display:grid;grid-template-columns:1fr auto;gap:2px 12px;align-items:baseline;
+  padding:12px 16px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);
+  background:var(--surface)}
+/* Placed rather than left to auto-flow, which put the clock in the first
+   column and pushed the name to the right of it. */
+.heat-name{grid-column:1;grid-row:1;font-size:15px}
+.heat-sub{grid-column:1;grid-row:2;font-size:12px;color:var(--faint)}
+.heat-clock{grid-column:2;grid-row:1 / span 2;align-self:center;
+  font-family:var(--mono);font-size:22px;font-variant-numeric:tabular-nums}
+.heat[data-live="0"] .heat-clock{color:var(--faint)}
+
+.lrec{display:grid;grid-template-columns:26px auto 1fr auto;gap:2px 8px;
+  padding:9px 16px;border-bottom:1px solid var(--line);align-items:baseline}
+.lrec .pos{grid-row:1 / span 2;align-self:center}
+.lrec .star{grid-row:1 / span 2;align-self:center}
+.lrec .who{grid-column:3}
+.lrec .best{grid-column:4;font-family:var(--mono);font-size:16px;text-align:right;
+  font-variant-numeric:tabular-nums}
+/* Three times and a lap count on a phone is a tight fit; truncating is the
+   lesser evil, because wrapping pushes the row's height around every time a
+   lap comes in and the whole list jumps. */
+.lrec .meta{grid-column:3;font-size:10px;color:var(--faint);font-family:var(--mono);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.lrec .gap{grid-column:4;font-size:11px;color:var(--faint);text-align:right;
+  font-family:var(--mono);font-variant-numeric:tabular-nums}
+/* The lap just set was this driver's fastest of the heat. */
+.lrec[data-pb="1"] .meta em{color:var(--gold);font-style:normal}
+.lrec[data-fav="1"]{background:#1a1d24}
+.lrec[data-fav="1"] .who{color:var(--accent)}
+.kart{display:inline-block;margin-left:6px;padding:1px 6px;border-radius:999px;
+  background:var(--raised);border:1px solid var(--line);color:var(--dim);
+  font-size:11px;font-family:var(--mono)}

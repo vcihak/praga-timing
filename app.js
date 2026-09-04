@@ -549,6 +549,73 @@ $("dGo").onclick = async () => {
 
 /* -------------------------------- live ------------------------------- */
 
+/* The feed speaks in single letters and the module's own settings translate
+ * them: translationAverage, translationBest, translationLast, translationGap
+ * and so on come back from livetiming/settings alongside the socket details.
+ * So these are read off the source, not guessed:
+ *
+ *   session   N name · C milliseconds left · L laps left · S/E running or not
+ *   driver    P position · N name · K kart · L laps · B best · T last · A average · G gap
+ *
+ * The old view printed the first five values of each driver and nothing else,
+ * which came out as LP, A, B, K, G — four numbers and a string, unlabelled.
+ */
+
+// 67889 -> "1:07.889", 43010 -> "43.010"
+function lap(ms) {
+  // Zero is "no lap yet", not a lap of no time: at the start of a heat every
+  // driver has one and a column of 0.000 says nothing.
+  if (!ms) return "—";
+  const s = ms / 1000;
+  if (s < 60) return s.toFixed(3);
+  return Math.floor(s / 60) + ":" + (s % 60).toFixed(3).padStart(6, "0");
+}
+
+// "01.043" -> "+1.043", "" -> "" (the leader has no gap)
+const gap = (g) => (g ? "+" + String(g).replace(/^0+(?=\d)/, "") : "");
+
+function clock(ms) {
+  if (ms == null || ms < 0) return "—";
+  const t = Math.floor(ms / 1000);
+  return Math.floor(t / 60) + ":" + String(t % 60).padStart(2, "0");
+}
+
+function renderLive(d) {
+  const drivers = Array.isArray(d.D) ? d.D : [];
+  const running = d.S === 1 && drivers.length > 0;
+
+  $("lHead").dataset.live = running ? "1" : "0";
+  $("lName").textContent = d.N || "Jízda";
+  // Laps-limited heats count laps, timed ones count down; show whichever the
+  // heat is actually being run to.
+  $("lClock").textContent = d.L > 0 ? d.L + " kol" : clock(d.C);
+  $("lSub").textContent = [
+    drivers.length ? drivers.length + " na trati" : "",
+    running ? (d.L > 0 ? "kol do konce" : "zbývá") : "dojeto",
+  ].filter(Boolean).join(" · ");
+  show($("lHead"), true);
+
+  const set = favs();
+  $("lList").innerHTML = drivers.map((r) => {
+    // The lap that just went in was the quickest of their heat. Only from the
+    // second lap on: a first lap is always somebody's best and marking the
+    // whole field gold at the green light says nothing.
+    const pb = r.B && r.T === r.B && r.L > 1;
+    return `<div class="lrec" data-pb="${pb ? 1 : 0}" data-fav="${isFav(set, r.N) ? 1 : 0}">
+      <span class="pos">${r.P ?? ""}</span>
+      <button class="star" data-fav="${escaped(r.N)}" data-on="${isFav(set, r.N) ? 1 : 0}"
+        title="Oblíbený">${isFav(set, r.N) ? "★" : "☆"}</button>
+      <span class="who">${escaped(r.N)}<span class="kart">${escaped(r.K)}</span></span>
+      <span class="best">${lap(r.B)}</span>
+      <span class="meta">${r.L ?? 0} kol · posl <em>${lap(r.T)}</em>${
+        r.L > 1 ? " · ø " + lap(r.A) : ""}</span>
+      <span class="gap">${gap(r.G)}</span>
+    </div>`;
+  }).join("");
+}
+
+wireStars($("lList"), () => state.live && renderLive(state.live));
+
 $("lGo").onclick = async () => {
   if (state.sock) {
     state.sock.close(); state.sock = null;
@@ -557,7 +624,7 @@ $("lGo").onclick = async () => {
   }
   $("lGo").textContent = "Připojuji…";
   try {
-    const conn = await connect();
+    const conn = await token();
     const s = await api(conn, "livetiming/settings", { locale: "cs", styleId: "", resourceId: state.rscId });
     const ws = new WebSocket(`wss://${s.liveServerHost}:${s.liveServerWssPort}`);
     state.sock = ws;
@@ -566,23 +633,19 @@ $("lGo").onclick = async () => {
       ws.send("START " + s.liveServerKey);
     };
     ws.onmessage = (e) => {
-      let data; try { data = JSON.parse(e.data); } catch { data = { _text: e.data }; }
-      state.live = data;
-      $("lDump").textContent = JSON.stringify(data, null, 2);
+      let msg; try { msg = JSON.parse(e.data); } catch { msg = { _text: e.data }; }
+      // Not every message carries the session block — many are the driver array
+      // and a couple of counters. Merging keeps the heat name and the clock on
+      // screen instead of blanking them between updates.
+      const data = state.live = { ...(state.live || {}), ...msg };
+      $("lDump").textContent = JSON.stringify(msg, null, 2);
       show($("lRaw"), true);
-      const empty = data && Object.keys(data).length === 0;
-      $("lNote").textContent = empty ? "Připojeno. Zrovna neběží žádná jízda." : "";
-      show($("lNote"), empty);
-      // The shape is undocumented. The old version printed the first five
-      // values of each row, which is why this read as unexplained numbers:
-      // without the field names there was no telling a lap time from a kart
-      // number. Names and values together are at least debuggable at the track.
-      const arr = Object.values(data).find(v => Array.isArray(v) && v.length && typeof v[0] === "object");
-      $("lList").innerHTML = !arr ? "" : arr.map((row) =>
-        `<div class="rec kv">` + Object.entries(row)
-          .filter(([, v]) => v !== null && v !== "" && typeof v !== "object")
-          .map(([k, v]) => `<span class="pair"><b>${escaped(k)}</b>${escaped(String(v))}</span>`)
-          .join("") + `</div>`).join("");
+
+      const idle = !data || !Array.isArray(data.D) || !data.D.length;
+      $("lNote").textContent = idle ? (s.translationNoSessionsRunning || "Zrovna nikdo nejede.") : "";
+      show($("lNote"), idle);
+      if (idle) { show($("lHead"), false); $("lList").innerHTML = ""; return; }
+      renderLive(data);
     };
     ws.onerror = () => {
       $("lNote").textContent = "Spojení selhalo. Prohlížeč nemusí pustit port " + s.liveServerWssPort + ".";
@@ -597,9 +660,6 @@ $("lGo").onclick = async () => {
     $("lGo").textContent = "Připojit";
   }
 };
-
-wireStars($("dList"), () =>
-  renderList($("dList"), [...dFound].sort((a, b) => (a.secs ?? 1e9) - (b.secs ?? 1e9)), true));
 
 $("lRaw").onclick = () => {
   const on = $("lDump").classList.contains("hide");
