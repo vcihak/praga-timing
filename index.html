@@ -44,16 +44,19 @@
   <section id="panel-best" class="hide">
     <div class="scroll" id="presets"></div>
     <div class="pad">
-      <div class="row">
+      <div class="row" id="bRange">
         <label><span>Od</span><input type="date" id="bFrom"></label>
-        <label><span>Do</span><input type="date" id="bTo"></label>
+        <label><span>Do včetně</span><input type="date" id="bTo"></label>
         <label class="narrow"><span>Počet</span><input type="number" id="bMax" value="100" min="1"></label>
+      </div>
+      <div class="row">
+        <button class="chip" id="bClock" data-on="0">⏱ Upřesnit čas</button>
+        <button class="chip" id="bFav" data-on="0">★ Jen oblíbení</button>
+        <button class="chip hide" id="bBack">← Zpět na rozsah</button>
       </div>
       <button class="go" id="bGo">Načíst</button>
       <div class="note bad hide" id="bErr"></div>
-      <div class="row">
-        <button class="chip" id="bFav" data-on="0">★ Jen oblíbení</button>
-      </div>
+      <p class="hint" id="bWhat"></p>
     </div>
     <div class="list" id="bList" data-fav-only="0"></div>
   </section>
@@ -65,7 +68,7 @@
         <input id="dName" placeholder="část přezdívky" autocomplete="off"></label>
       <div class="row">
         <label><span>Od</span><input type="date" id="dFrom"></label>
-        <label><span>Do</span><input type="date" id="dTo"></label>
+        <label><span>Do včetně</span><input type="date" id="dTo"></label>
       </div>
       <div class="row" id="dSize"></div>
       <p class="hint" id="dHint"></p>

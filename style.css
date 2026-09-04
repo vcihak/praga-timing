@@ -34,6 +34,10 @@
   .pad{padding:0 16px;display:flex;flex-direction:column;gap:12px}
   label{display:flex;flex-direction:column;gap:4px;flex:1 1 130px;min-width:0}
   label.narrow{flex:0 1 92px}
+  /* A datetime field renders the date, the time and an AM/PM marker; at half
+     the width of a phone the marker falls off the end and 20:35 reads as
+     08:35. One per line when the time is showing. */
+  .row.stack label{flex:1 1 100%}
   label span{font-size:12px;color:var(--faint)}
   input,select{background:var(--raised);color:var(--text);border:1px solid var(--line);
     border-radius:8px;padding:10px 12px;font:inherit;width:100%;min-width:0;max-width:100%;
@@ -56,6 +60,11 @@
     color:var(--faint);font-variant-numeric:tabular-nums}
   .who{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px}
   .when{flex:0 0 auto;font-size:11px;color:var(--faint);white-space:nowrap}
+  /* The timestamp is the way into a single heat, so it has to look pressable
+     without turning every row into a wall of buttons. */
+  button.when{background:none;border:none;border-bottom:1px dotted var(--line);
+    padding:2px 0;font-family:inherit}
+  button.when:hover{color:var(--dim);border-bottom-color:var(--dim)}
   .score{flex:0 0 auto;font-family:var(--mono);font-size:16px;min-width:72px;text-align:right;
     font-variant-numeric:tabular-nums}
   .rec[data-top="1"] .pos,.rec[data-top="1"] .score{color:var(--gold)}

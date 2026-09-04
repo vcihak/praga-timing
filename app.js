@@ -204,7 +204,8 @@ function renderList(el, rows, highlight) {
       <button class="star" data-fav="${escaped(r.participant)}" data-on="${on ? 1 : 0}"
         title="Oblíbený">${on ? "★" : "☆"}</button>
       <span class="who" ${highlight ? 'style="color:var(--accent)"' : ""}>${escaped(r.participant)}</span>
-      <span class="when">${czDate(r.date)}</span>
+      <button class="when at" data-at="${escaped(r.date)}"
+        title="Ukázat celou tuhle jízdu">${czDate(r.date)}</button>
       <span class="score">${r.score}</span></div>`;
   }).join("");
 }
@@ -300,21 +301,58 @@ $("presets").innerHTML = PRESETS.map(([l], i) =>
 $("presets").onclick = (e) => {
   const b = e.target.closest("[data-p]"); if (!b) return;
   [...$("presets").children].forEach(c => c.dataset.on = c === b ? "1" : "0");
+  // A preset is a span of whole days, so it also leaves the heat view.
+  rangeBefore = null;
+  show($("bBack"), false);
+  setClock(false);
   $("bFrom").value = PRESETS[+b.dataset.p][1]();
-  $("bTo").value = shiftDays(1);
+  $("bTo").value = shiftDays(0);
   loadBest();
 };
 
 // Kept so starring somebody can repaint the list without asking again.
 let bestRows = [];
 
+const withTime = () => $("bClock").dataset.on === "1";
+
+/* "Do" means what it says.
+ *
+ * The API's endDate is exclusive, which is why this field used to hold
+ * tomorrow's date and nobody could tell whether a range included its last day.
+ * The field is inclusive now and the exclusive end is worked out here: the day
+ * after when there is no time, the minute after when there is.
+ */
+function apiRange() {
+  if (!withTime()) {
+    const end = new Date($("bTo").value + "T00:00:00");
+    end.setDate(end.getDate() + 1);
+    return { from: $("bFrom").value + "T00:00:00", to: stamp(end) };
+  }
+  const end = new Date($("bTo").value);
+  end.setMinutes(end.getMinutes() + 1);
+  return { from: stamp(new Date($("bFrom").value)), to: stamp(end) };
+}
+
+// Says out loud what was asked for, because a range with times in it is not
+// something you can read off two input boxes at a glance.
+function describeRange() {
+  const r = apiRange();
+  const nice = (t) => t.replace("T", " ").slice(0, withTime() ? 16 : 10);
+  const end = new Date(r.to);
+  end.setMinutes(end.getMinutes() - (withTime() ? 1 : 0));
+  if (!withTime()) end.setDate(end.getDate() - 1);
+  $("bWhat").textContent = `${nice(r.from)} — ${nice(stamp(end))} včetně`;
+}
+
 async function loadBest() {
   show($("bErr"), false);
+  describeRange();
   $("bList").innerHTML = '<div class="empty">Načítám…</div>';
   try {
+    const r = apiRange();
     bestRows = await records({
       rscId: state.rscId, scgId: state.scgId,
-      from: $("bFrom").value, to: $("bTo").value, max: +$("bMax").value || 100,
+      from: r.from, to: r.to, max: +$("bMax").value || 100,
     });
     renderList($("bList"), bestRows, false);
   } catch (e) {
@@ -322,6 +360,72 @@ async function loadBest() {
     $("bErr").textContent = e.message;
     show($("bErr"), true);
   }
+}
+
+/* Switching the two boxes between a day and a moment.
+ *
+ * Same two fields either way rather than four: a range with times is the rare
+ * case, and making it visible all the time would mean typing an hour you do
+ * not care about every time you look at a week.
+ */
+function setClock(on) {
+  $("bClock").dataset.on = on ? "1" : "0";
+  $("bRange").classList.toggle("stack", on);
+  for (const id of ["bFrom", "bTo"]) {
+    const el = $(id), day = (el.value || "").slice(0, 10);
+    el.type = on ? "datetime-local" : "date";
+    el.value = on ? day + (id === "bFrom" ? "T00:00" : "T23:59") : day;
+  }
+  describeRange();
+}
+
+$("bClock").onclick = () => { setClock(!withTime()); loadBest(); };
+
+/* Tap a time to see the heat it belongs to.
+ *
+ * "Who did I drive with" is the question this page could not answer without
+ * typing two timestamps, and typing them is exactly what nobody does standing
+ * in the paddock. Six minutes either side of the lap is the whole heat and
+ * usually nothing else; heats do not start on a grid, so the odd neighbour
+ * from the session before can slip in. Better that than missing half a heat.
+ */
+const HEAT_ZOOM = 6;
+const localMin = (d) => stamp(d).slice(0, 16);
+
+let rangeBefore = null;
+
+function zoomToHeat(when) {
+  const t = new Date(when);
+  if (isNaN(+t)) return;
+  if (!rangeBefore) {
+    rangeBefore = { clock: withTime(), from: $("bFrom").value, to: $("bTo").value };
+  }
+  // No preset describes one heat, so stop claiming one does.
+  [...$("presets").children].forEach((c) => (c.dataset.on = "0"));
+  setClock(true);
+  $("bFrom").value = localMin(new Date(+t - HEAT_ZOOM * 60000));
+  $("bTo").value = localMin(new Date(+t + HEAT_ZOOM * 60000));
+  show($("bBack"), true);
+  selectTab("best");
+  loadBest();
+}
+
+$("bBack").onclick = () => {
+  if (!rangeBefore) return;
+  // Values after the switch, not before: setClock rewrites them from the day.
+  setClock(rangeBefore.clock);
+  $("bFrom").value = rangeBefore.from;
+  $("bTo").value = rangeBefore.to;
+  rangeBefore = null;
+  show($("bBack"), false);
+  loadBest();
+};
+
+for (const id of ["bList", "dList"]) {
+  $(id).addEventListener("click", (e) => {
+    const b = e.target.closest("[data-at]");
+    if (b) zoomToHeat(b.dataset.at);
+  });
 }
 
 wireStars($("bList"), () => renderList($("bList"), bestRows, false));
@@ -517,7 +621,7 @@ $("bGo").onclick = loadBest;
 
 // Today on the leaderboard, this week on the driver page: both are what you
 // want when you have just got off the track, and both are cheap to ask for.
-$("bFrom").value = shiftDays(0);      $("bTo").value = shiftDays(1);
-$("dFrom").value = mondayThisWeek();  $("dTo").value = shiftDays(1);
+$("bFrom").value = shiftDays(0);      $("bTo").value = shiftDays(0);
+$("dFrom").value = mondayThisWeek();  $("dTo").value = shiftDays(0);
 updateHint();
 boot();
