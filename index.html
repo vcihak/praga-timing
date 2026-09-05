@@ -94,7 +94,16 @@
       <div class="heat-clock" id="lClock"></div>
       <div class="heat-sub" id="lSub"></div>
     </div>
-    <div class="list" id="lList"></div>
+    <div class="tablewrap hide" id="lTableWrap">
+      <table class="ltable">
+        <thead><tr>
+          <th class="c-pos"></th><th class="c-kart">Kára</th><th class="c-who">Jezdec</th>
+          <th class="c-time">Posl.</th><th class="c-time">Nej.</th>
+          <th class="c-gap">Rozdíl</th><th class="c-laps">Kol</th>
+        </tr></thead>
+        <tbody id="lList"></tbody>
+      </table>
+    </div>
     <div class="pad" style="padding-top:12px">
       <button class="ghost hide" id="lRaw" style="align-self:flex-start">Surová data</button>
       <pre class="hide" id="lDump"></pre>

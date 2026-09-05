@@ -93,54 +93,56 @@
 /* ------------------------------ live timing ------------------------------ */
 /* Field names come from the module's own settings, so the letters in the feed
    are not being guessed at: A is Průměr, B Nejlepší, T Poslední, G MEZERA. */
-/* A dark, saturated blue rather than the app's own --surface grey: this is
-   the header colour every timing tower uses, and borrowing it is what makes
-   the live tab read as one the moment it opens, before a single lap comes in. */
-.heat{position:relative;display:grid;grid-template-columns:1fr auto;gap:2px 12px;
-  align-items:baseline;padding:14px 16px 12px;background:#0A1440;
-  border-bottom:1px solid #1C2B6B;overflow:hidden}
-/* A thin checkered strip along the top — the one motorsport motif that reads
-   as "racing" at a glance, kept to a sliver so it decorates rather than
-   competes with the numbers underneath. */
-.heat::before{content:"";position:absolute;inset:0 0 auto 0;height:5px;
-  background:repeating-linear-gradient(-45deg,#fff 0 6px,#0A1440 6px 12px)}
-.heat-name{grid-column:1;grid-row:1;font-size:15px;margin-top:3px}
-.heat-sub{grid-column:1;grid-row:2;font-size:12px;color:#8891C4}
+.heat{display:grid;grid-template-columns:1fr auto;gap:2px 12px;align-items:baseline;
+  padding:12px 16px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);
+  background:var(--surface)}
+/* Placed rather than left to auto-flow, which put the clock in the first
+   column and pushed the name to the right of it. */
+.heat-name{grid-column:1;grid-row:1;font-size:15px}
+.heat-sub{grid-column:1;grid-row:2;font-size:12px;color:var(--faint)}
 .heat-clock{grid-column:2;grid-row:1 / span 2;align-self:center;
-  font-family:var(--mono);font-size:24px;font-variant-numeric:tabular-nums}
-.heat[data-live="0"] .heat-clock{color:#8891C4}
+  font-family:var(--mono);font-size:22px;font-variant-numeric:tabular-nums}
+.heat[data-live="0"] .heat-clock{color:var(--faint)}
 
-.lrec{display:grid;grid-template-columns:26px auto 1fr auto;gap:2px 8px;
-  padding:9px 16px;border-bottom:1px solid var(--line);align-items:baseline}
-.lrec:nth-child(even){background:rgba(255,255,255,.025)}
-.lrec .pos{grid-row:1 / span 2;align-self:center}
-.lrec .star{grid-row:1 / span 2;align-self:center}
-.lrec .who{grid-column:3;display:flex;align-items:center;gap:2px;min-width:0}
-.lrec .who > span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-/* The lap that just came in is the whole point of a live screen, so it is the
-   number that is big — not the running best, which is a fact you can check
-   any time. Coloured only here: a timing tower never colours the best-lap
-   column, since that figure did not just happen. */
-.lrec .last{grid-column:4;font-family:var(--mono);font-size:17px;text-align:right;
-  font-variant-numeric:tabular-nums;color:var(--dim)}
-.lrec[data-mark="purple"] .last{color:var(--purple)}
-.lrec[data-mark="green"]  .last{color:var(--green)}
-.lrec[data-mark="yellow"] .last{color:var(--yellow)}
-/* Three figures on a phone is a tight fit; truncating is the lesser evil,
-   because wrapping pushes the row's height around every time a lap comes in
-   and the whole list jumps. */
-.lrec .meta{grid-column:3;font-size:10px;color:var(--faint);font-family:var(--mono);
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
-.lrec .gap{grid-column:4;font-size:11px;color:var(--faint);text-align:right;
+/* A real table, columns and all — a timing tower is a grid of numbers you
+   read down a column (everyone's last lap, everyone's gap), and a stack of
+   cards with a caption line underneath cannot be scanned that way. Full
+   width, no side padding: a table earns back the margin a card list needs
+   for breathing room, because the grid lines do that job instead. */
+.tablewrap{overflow-x:auto}
+.ltable{width:100%;border-collapse:collapse;table-layout:fixed;font-size:13px}
+.ltable th{padding:6px 4px;font-size:11px;font-weight:400;color:var(--faint);
+  text-align:right;border-bottom:1px solid var(--line);white-space:nowrap}
+.ltable th.c-pos,.ltable th.c-kart,.ltable th.c-who{text-align:left}
+.ltable td{padding:7px 4px;border-bottom:1px solid var(--line);vertical-align:middle}
+.ltable tbody tr:nth-child(even){background:rgba(255,255,255,.025)}
+.ltable tbody tr[data-fav="1"]{background:rgba(237,28,36,.08)}
+
+.c-pos{width:15%}
+.c-kart{width:13%}
+.c-who{width:30%}
+.c-time{width:19%}
+.c-gap{width:12%}
+.c-laps{width:8%}
+
+.ltable .poscell{display:flex;align-items:center;gap:2px}
+.ltable td.c-who{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ltable td.c-time,.ltable td.c-gap,.ltable td.c-laps{text-align:right;
   font-family:var(--mono);font-variant-numeric:tabular-nums}
-.lrec[data-fav="1"]{background:#1a1d24}
-.lrec[data-fav="1"] .who > span{color:var(--accent)}
-/* The kart number as a slanted tag rather than a plain pill — the shape every
-   timing screen uses for it. One colour for everyone: the feed names no
-   class or team here, so painting karts by colour would be inventing a fact
-   nobody sent. */
-.kart{display:inline-flex;margin-left:2px;flex:none}
-.kart b{display:inline-block;background:var(--accent);color:#fff;
-  padding:1px 6px 1px 8px;font-size:11px;font-weight:700;font-family:var(--mono);
-  transform:skewX(-12deg)}
-.kart b span{display:inline-block;transform:skewX(12deg)}
+/* A little daylight between the two time columns — right up against each
+   other, "Posl." and "Nej." read as one smeared number. */
+.ltable td.c-time:first-of-type,.ltable th.c-time:first-of-type{padding-right:10px}
+/* The lap that just came in is the point of a live screen, so its column is
+   the one that gets coloured — not the running best, which is a fact you can
+   check any time. A timing tower never colours the best-lap column, since
+   that figure did not just happen. */
+.ltable td.last{color:var(--dim)}
+.ltable tr[data-mark="purple"] td.last{color:var(--purple)}
+.ltable tr[data-mark="green"]  td.last{color:var(--green)}
+.ltable tr[data-mark="yellow"] td.last{color:var(--yellow)}
+.ltable td.c-gap,.ltable td.c-laps{color:var(--faint);font-size:12px}
+/* One colour for every kart: the feed names no class or team here, and
+   painting karts by colour would be inventing a fact nobody sent. */
+.kart{display:inline-block;background:var(--raised);border:1px solid var(--line);
+  color:var(--dim);border-radius:4px;padding:1px 5px;font-size:11px;
+  font-family:var(--mono);font-weight:700}

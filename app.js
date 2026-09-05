@@ -607,6 +607,7 @@ function renderLive(d) {
     running ? (d.L > 0 ? "kol do konce" : "zbývá") : "dojeto",
   ].filter(Boolean).join(" · ");
   show($("lHead"), true);
+  show($("lTableWrap"), true);
 
   const set = favs();
   // The quickest lap anybody has done in this heat, which is what makes a time
@@ -631,16 +632,20 @@ function renderLive(d) {
     // An anonymous driver is named after the kart, so the badge would print
     // the same number twice.
     const badge = r.K && !name.endsWith(" " + r.K)
-      ? `<span class="kart"><b><span>${escaped(r.K)}</span></b></span>` : "";
-    return `<div class="lrec" data-mark="${mark}" data-fav="${isFav(set, name) ? 1 : 0}">
-      <span class="pos">${r.P ?? ""}</span>
-      <button class="star" data-fav="${escaped(name)}" data-on="${isFav(set, name) ? 1 : 0}"
-        title="Oblíbený">${isFav(set, name) ? "★" : "☆"}</button>
-      <span class="who"><span>${escaped(name)}</span>${badge}</span>
-      <span class="last">${lap(r.T)}</span>
-      <span class="meta">${r.L ?? 0} kol · nej ${lap(r.B)}</span>
-      <span class="gap">${gap(r.G)}</span>
-    </div>`;
+      ? `<span class="kart">${escaped(r.K)}</span>` : "";
+    const on = isFav(set, name);
+    return `<tr data-mark="${mark}" data-fav="${on ? 1 : 0}">
+      <td class="c-pos"><span class="poscell">
+        <button class="star" data-fav="${escaped(name)}" data-on="${on ? 1 : 0}"
+          title="Oblíbený">${on ? "★" : "☆"}</button>${r.P ?? ""}
+      </span></td>
+      <td class="c-kart">${badge}</td>
+      <td class="c-who">${escaped(name)}</td>
+      <td class="c-time last">${lap(r.T)}</td>
+      <td class="c-time">${lap(r.B)}</td>
+      <td class="c-gap">${gap(r.G)}</td>
+      <td class="c-laps">${r.L ?? 0}</td>
+    </tr>`;
   }).join("");
 }
 
@@ -676,7 +681,7 @@ $("lGo").onclick = async () => {
       // "running" as jogging. Ours instead.
       $("lNote").textContent = idle ? "Zrovna nikdo nejede." : "";
       show($("lNote"), idle);
-      if (idle) { show($("lHead"), false); $("lList").innerHTML = ""; return; }
+      if (idle) { show($("lHead"), false); show($("lTableWrap"), false); $("lList").innerHTML = ""; return; }
       renderLive(data);
     };
     ws.onerror = () => {
