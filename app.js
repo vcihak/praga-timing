@@ -602,9 +602,13 @@ function renderLive(d) {
   // Laps-limited heats count laps, timed ones count down; show whichever the
   // heat is actually being run to.
   $("lClock").textContent = d.L > 0 ? d.L + " kol" : clock(d.C);
+  // The clock already says how much heat is left; repeating that as a word
+  // next to it ("zbývá") was saying the same thing twice. Only worth a word
+  // when the heat has actually ended, since a stopped "0:00" reads the same
+  // as a running one otherwise.
   $("lSub").textContent = [
     drivers.length ? drivers.length + " na trati" : "",
-    running ? (d.L > 0 ? "kol do konce" : "zbývá") : "dojeto",
+    running ? "" : "dojeto",
   ].filter(Boolean).join(" · ");
   show($("lHead"), true);
   show($("lTableWrap"), true);

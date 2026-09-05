@@ -55,6 +55,14 @@
   .go{background:var(--accent);color:#fff;border:none;border-radius:8px;
     padding:13px;font-size:14px;width:100%}
   .go.quiet{background:var(--raised);color:var(--dim);border:1px solid var(--line)}
+  /* A toggle, not a submit button — connecting is instant and the control
+     stays on screen the whole time the feed is open, so it does not need the
+     full-width weight of an action like "Načíst" or "Projet". */
+  /* .pad is a column flexbox and stretches its children to full width by
+     default; this is the one button in it that should not be. */
+  .live-toggle{align-self:flex-start;background:var(--accent);color:#fff;border:none;
+    border-radius:999px;padding:7px 18px;font-size:13px;font-weight:600}
+  .live-toggle.quiet{background:var(--raised);color:var(--dim);border:1px solid var(--line)}
   .note{font-size:13px;color:var(--dim);background:var(--surface);
     border:1px solid var(--line);border-radius:8px;padding:10px 12px}
   .note.bad{color:var(--accent)}
