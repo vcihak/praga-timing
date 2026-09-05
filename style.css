@@ -2,9 +2,12 @@
     --bg:#14161A; --surface:#1B1E24; --raised:#22262E; --line:#2E333C;
     --text:#E9EBEE; --dim:#8B929C; --faint:#5C636D;
     --accent:#ED1C24; --gold:#F0B429;
-    /* Timing-screen convention: purple the fastest of the session, green a
-       driver's own best, yellow an ordinary lap. */
-    --purple:#B36BF5; --green:#3DD68C; --yellow:#F0B429;
+    /* The colours every timing tower uses: purple the fastest lap of the
+       session by anyone, green a driver's own best, yellow an ordinary one.
+       Kept close to the saturated hues broadcasts use rather than softened
+       to match the rest of the palette — the whole point is that they read
+       as those three specific things at a glance, on any timing screen. */
+    --purple:#E619E6; --green:#28E070; --yellow:#F5F500;
     --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   }
   *{box-sizing:border-box}
@@ -90,39 +93,54 @@
 /* ------------------------------ live timing ------------------------------ */
 /* Field names come from the module's own settings, so the letters in the feed
    are not being guessed at: A is Průměr, B Nejlepší, T Poslední, G MEZERA. */
-.heat{display:grid;grid-template-columns:1fr auto;gap:2px 12px;align-items:baseline;
-  padding:12px 16px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);
-  background:var(--surface)}
-/* Placed rather than left to auto-flow, which put the clock in the first
-   column and pushed the name to the right of it. */
-.heat-name{grid-column:1;grid-row:1;font-size:15px}
-.heat-sub{grid-column:1;grid-row:2;font-size:12px;color:var(--faint)}
+/* A dark, saturated blue rather than the app's own --surface grey: this is
+   the header colour every timing tower uses, and borrowing it is what makes
+   the live tab read as one the moment it opens, before a single lap comes in. */
+.heat{position:relative;display:grid;grid-template-columns:1fr auto;gap:2px 12px;
+  align-items:baseline;padding:14px 16px 12px;background:#0A1440;
+  border-bottom:1px solid #1C2B6B;overflow:hidden}
+/* A thin checkered strip along the top — the one motorsport motif that reads
+   as "racing" at a glance, kept to a sliver so it decorates rather than
+   competes with the numbers underneath. */
+.heat::before{content:"";position:absolute;inset:0 0 auto 0;height:5px;
+  background:repeating-linear-gradient(-45deg,#fff 0 6px,#0A1440 6px 12px)}
+.heat-name{grid-column:1;grid-row:1;font-size:15px;margin-top:3px}
+.heat-sub{grid-column:1;grid-row:2;font-size:12px;color:#8891C4}
 .heat-clock{grid-column:2;grid-row:1 / span 2;align-self:center;
-  font-family:var(--mono);font-size:22px;font-variant-numeric:tabular-nums}
-.heat[data-live="0"] .heat-clock{color:var(--faint)}
+  font-family:var(--mono);font-size:24px;font-variant-numeric:tabular-nums}
+.heat[data-live="0"] .heat-clock{color:#8891C4}
 
 .lrec{display:grid;grid-template-columns:26px auto 1fr auto;gap:2px 8px;
   padding:9px 16px;border-bottom:1px solid var(--line);align-items:baseline}
+.lrec:nth-child(even){background:rgba(255,255,255,.025)}
 .lrec .pos{grid-row:1 / span 2;align-self:center}
 .lrec .star{grid-row:1 / span 2;align-self:center}
-.lrec .who{grid-column:3}
-.lrec .best{grid-column:4;font-family:var(--mono);font-size:16px;text-align:right;
-  font-variant-numeric:tabular-nums}
-/* Three times and a lap count on a phone is a tight fit; truncating is the
-   lesser evil, because wrapping pushes the row's height around every time a
-   lap comes in and the whole list jumps. */
+.lrec .who{grid-column:3;display:flex;align-items:center;gap:2px;min-width:0}
+.lrec .who > span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* The lap that just came in is the whole point of a live screen, so it is the
+   number that is big — not the running best, which is a fact you can check
+   any time. Coloured only here: a timing tower never colours the best-lap
+   column, since that figure did not just happen. */
+.lrec .last{grid-column:4;font-family:var(--mono);font-size:17px;text-align:right;
+  font-variant-numeric:tabular-nums;color:var(--dim)}
+.lrec[data-mark="purple"] .last{color:var(--purple)}
+.lrec[data-mark="green"]  .last{color:var(--green)}
+.lrec[data-mark="yellow"] .last{color:var(--yellow)}
+/* Three figures on a phone is a tight fit; truncating is the lesser evil,
+   because wrapping pushes the row's height around every time a lap comes in
+   and the whole list jumps. */
 .lrec .meta{grid-column:3;font-size:10px;color:var(--faint);font-family:var(--mono);
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
 .lrec .gap{grid-column:4;font-size:11px;color:var(--faint);text-align:right;
   font-family:var(--mono);font-variant-numeric:tabular-nums}
-.lrec .meta em{font-style:normal}
-.lrec[data-last="purple"] .meta em{color:var(--purple)}
-.lrec[data-last="green"]  .meta em{color:var(--green)}
-.lrec[data-last="yellow"] .meta em{color:var(--yellow)}
-.lrec[data-best="purple"] .best{color:var(--purple)}
-.lrec[data-best="green"]  .best{color:var(--green)}
 .lrec[data-fav="1"]{background:#1a1d24}
-.lrec[data-fav="1"] .who{color:var(--accent)}
-.kart{display:inline-block;margin-left:6px;padding:1px 6px;border-radius:999px;
-  background:var(--raised);border:1px solid var(--line);color:var(--dim);
-  font-size:11px;font-family:var(--mono)}
+.lrec[data-fav="1"] .who > span{color:var(--accent)}
+/* The kart number as a slanted tag rather than a plain pill — the shape every
+   timing screen uses for it. One colour for everyone: the feed names no
+   class or team here, so painting karts by colour would be inventing a fact
+   nobody sent. */
+.kart{display:inline-flex;margin-left:2px;flex:none}
+.kart b{display:inline-block;background:var(--accent);color:#fff;
+  padding:1px 6px 1px 8px;font-size:11px;font-weight:700;font-family:var(--mono);
+  transform:skewX(-12deg)}
+.kart b span{display:inline-block;transform:skewX(12deg)}

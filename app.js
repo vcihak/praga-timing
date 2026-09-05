@@ -614,32 +614,31 @@ function renderLive(d) {
   const fastest = Math.min(...drivers.map((r) => r.B || Infinity));
 
   $("lList").innerHTML = drivers.map((r) => {
-    /* Timing-screen colours, as everybody expects them:
+    /* Timing-screen colours, as everybody expects them — and applied to the
+     * lap that just happened, never to the running best: a tower colours the
+     * event, not the record book.
      *   purple  quickest lap of the heat, by anyone
      *   green   that driver's own best
      *   yellow  an ordinary lap
      * Only from the second lap on. A first lap is always its driver's best,
      * and painting the whole field green at the green light says nothing. */
-    const lastRank = !r.T || r.L < 2 ? ""
+    const mark = !r.T || r.L < 2 ? ""
       : r.T === fastest ? "purple"
       : r.T === r.B ? "green"
       : "yellow";
-    const bestRank = r.B && r.B === fastest ? "purple" : r.B ? "green" : "";
     // The feed pads names to a fixed width; two spaces mid-name is not a name.
     const name = String(r.N || "").replace(/\s+/g, " ").trim();
-    return `<div class="lrec" data-last="${lastRank}" data-best="${bestRank}"
-      data-fav="${isFav(set, name) ? 1 : 0}">
+    // An anonymous driver is named after the kart, so the badge would print
+    // the same number twice.
+    const badge = r.K && !name.endsWith(" " + r.K)
+      ? `<span class="kart"><b><span>${escaped(r.K)}</span></b></span>` : "";
+    return `<div class="lrec" data-mark="${mark}" data-fav="${isFav(set, name) ? 1 : 0}">
       <span class="pos">${r.P ?? ""}</span>
       <button class="star" data-fav="${escaped(name)}" data-on="${isFav(set, name) ? 1 : 0}"
         title="Oblíbený">${isFav(set, name) ? "★" : "☆"}</button>
-      <span class="who">${escaped(name)}${
-        // An anonymous driver is named after the kart, so the badge would print
-        // the same number twice.
-        r.K && !name.endsWith(" " + r.K) ? `<span class="kart">${escaped(r.K)}</span>` : ""
-      }</span>
-      <span class="best">${lap(r.B)}</span>
-      <span class="meta">${r.L ?? 0} kol · posl <em>${lap(r.T)}</em>${
-        r.L > 1 ? " · ø " + lap(r.A) : ""}</span>
+      <span class="who"><span>${escaped(name)}</span>${badge}</span>
+      <span class="last">${lap(r.T)}</span>
+      <span class="meta">${r.L ?? 0} kol · nej ${lap(r.B)}</span>
       <span class="gap">${gap(r.G)}</span>
     </div>`;
   }).join("");
