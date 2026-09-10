@@ -11,13 +11,98 @@ const HANDSHAKE = "https://backend.sms-timing.com/api/connectioninfo?type=module
 // reads oddly as a page title, so name the venue here.
 const VENUE = "Praga Arena";
 
+const KEY_STORE = "praga.key";
+const FAVS = "praga.favs";
+
 const $ = (id) => document.getElementById(id);
 const show = (el, on) => el.classList.toggle("hide", !on);
 
-const state = {
-  key: new URLSearchParams(location.search).get("key") || DEFAULT_KEY,
-  rscId: "", scgId: "", resources: null, tab: "best", abort: false, sock: null, live: null,
-};
+/* Escaping for both text and attributes.
+ *
+ * The old helper round-tripped through textContent, which escapes & < > and
+ * leaves quotes alone — fine for text, wrong for the attributes these strings
+ * actually land in. Nicknames are free-text registration input, so a single
+ * double quote was enough to break out of data-fav="…" and inject markup. */
+const esc = (t) => String(t ?? "")
+  .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+  .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+
+// The live feed pads names to a fixed width and the records API may not, so
+// both sides are squeezed through here before anything compares or stores
+// them. Otherwise starring somebody live would not star them on the board.
+const norm = (n) => String(n ?? "").replace(/\s+/g, " ").trim();
+
+const state = { rscId: "", resources: null, live: null, key: "" };
+
+/* ---------------------------- track time -----------------------------
+ *
+ * Every time in this app is track wall-clock, never the reader's. A phone in
+ * another timezone must still say that a heat ran at 20:35, and "today" must
+ * mean today at the track. So: one conversion at the edges, into a Date whose
+ * *UTC* fields hold Prague wall-clock, and plain UTC arithmetic from there.
+ * Nothing in between ever touches a local getter. */
+const TZ = "Europe/Prague";
+const TZ_PARTS = new Intl.DateTimeFormat("en-GB", {
+  timeZone: TZ, hour12: false, year: "numeric", month: "2-digit",
+  day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit",
+});
+
+function wallOf(d) {
+  const p = {};
+  for (const { type, value } of TZ_PARTS.formatToParts(d)) p[type] = value;
+  // Some engines render midnight as hour 24 under hour12:false.
+  return new Date(Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour % 24, +p.minute, +p.second));
+}
+
+const nowWall = () => wallOf(new Date());
+
+const NAIVE = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?/;
+const ZONED = /([Zz]|[+-]\d{2}:?\d{2})$/;
+
+// A timestamp from the API. Naive strings are track wall-clock already and
+// must not be reinterpreted; a string that does carry an offset is converted.
+function wall(s) {
+  if (s instanceof Date) return isNaN(+s) ? null : wallOf(s);
+  const t = String(s ?? "").trim();
+  const m = t.match(NAIVE);
+  if (m && !ZONED.test(t)) return new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +(m[6] || 0)));
+  const d = new Date(t);
+  return isNaN(+d) ? null : wallOf(d);
+}
+
+// "YYYY-MM-DD" (a date input) -> wall midnight. The old code passed this same
+// string to new Date() in one place and to new Date(s+"T00:00:00") in another,
+// which are a day apart west of Greenwich.
+function wallDay(s) {
+  const m = String(s ?? "").match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])) : null;
+}
+
+const pad = (n) => String(n).padStart(2, "0");
+const iso = (d) => `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
+const hhmm = (d) => `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
+const stamp = (d) => `${iso(d)}T${hhmm(d)}:00`;
+const addDays = (d, n) => { const x = new Date(+d); x.setUTCDate(x.getUTCDate() + n); return x; };
+const addMin = (d, n) => new Date(+d + n * 60000);
+
+const today = () => iso(nowWall());
+const shiftDays = (n) => iso(addDays(nowWall(), n));
+const startOfMonth = () => { const d = nowWall(); d.setUTCDate(1); return iso(d); };
+const startOfYear = () => nowWall().getUTCFullYear() + "-01-01";
+// Monday of the current week (getUTCDay is Sunday-based, so rotate it).
+const mondayThisWeek = () => { const d = nowWall(); return iso(addDays(d, -((d.getUTCDay() + 6) % 7))); };
+
+const czDate = (s) => { const d = wall(s); return d ? `${d.getUTCDate()}.${d.getUTCMonth() + 1}. ${hhmm(d)}` : ""; };
+const czDay = (s) => { const d = wall(s); return d ? `${d.getUTCDate()}. ${d.getUTCMonth() + 1}. ${d.getUTCFullYear()}` : ""; };
+
+// "16.341" -> 16.341 ; "1:00.796" -> 60.796
+function toSeconds(s) {
+  if (!s) return null;
+  const p = String(s).split(":").map(parseFloat);
+  return p.some(isNaN) ? null : p.reduce((a, n) => a * 60 + n, 0);
+}
+
+/* -------------------------------- api -------------------------------- */
 
 async function connect() {
   const r = await fetch(HANDSHAKE, { headers: { Authorization: "Basic " + state.key } });
@@ -94,39 +179,12 @@ async function records(p) {
   return [];
 }
 
-/* ------------------------------- utils ------------------------------- */
+const query = (p) => records({ rscId: state.rscId, scgId: view.scg, ...p });
 
-// Local, not toISOString(): that converts to UTC first, so an evening in CEST
-// comes out as the day before once the clock passes 22:00.
-const pad = (n) => String(n).padStart(2, "0");
-const iso = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-const stamp = (d) => `${iso(d)}T${pad(d.getHours())}:${pad(d.getMinutes())}:00`;
-const shiftDays = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return iso(d); };
-const startOfMonth = () => { const d = new Date(); d.setDate(1); return iso(d); };
-const startOfYear = () => new Date().getFullYear() + "-01-01";
-// Monday of the current week (getDay() is Sunday-based, so rotate it).
-const mondayThisWeek = () => {
-  const d = new Date();
-  d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
-  return iso(d);
-};
-
-// "16.341" -> 16.341 ; "1:00.796" -> 60.796
-function toSeconds(s) {
-  if (!s) return null;
-  const p = String(s).split(":").map(parseFloat);
-  return p.some(isNaN) ? null : p.reduce((a, n) => a * 60 + n, 0);
-}
-
-function czDate(s) {
-  const d = new Date(s);
-  return `${d.getDate()}.${d.getMonth() + 1}. ` +
-    String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
-}
+/* ------------------------------ windows ------------------------------ */
 
 // The track is open roughly 10:00-22:00; the hour either side is slack, so a
-// heat that started early or ran long is still inside a window. Everything
-// outside is closed and asking about it is a request spent on nothing.
+// heat that started early or ran long is still inside a window.
 const OPEN_FROM = 9;
 const OPEN_TO = 23;
 // Under the length of a heat, so two heats never land in one window. The API
@@ -134,40 +192,49 @@ const OPEN_TO = 23;
 // two heats reports the better of them and silently drops the other.
 const HEAT_MINUTES = 9;
 
+const winOf = (a, b) => ({ from: stamp(a), to: stamp(b), a, b });
+
 function heatWindows(from, to) {
-  const out = [];
-  const end = new Date(to + "T00:00:00");
-  for (const d = new Date(from + "T00:00:00"); d <= end; d.setDate(d.getDate() + 1)) {
+  const out = [], end = wallDay(to);
+  for (let d = wallDay(from); d && d <= end; d = addDays(d, 1))
     for (let m = OPEN_FROM * 60; m < OPEN_TO * 60; m += HEAT_MINUTES) {
-      const a = new Date(d); a.setHours(0, m, 0, 0);
-      out.push({ from: stamp(a), to: stamp(new Date(+a + HEAT_MINUTES * 60000)) });
+      const a = addMin(d, m);
+      out.push(winOf(a, addMin(a, HEAT_MINUTES)));
     }
-  }
+  return out;
+}
+
+// Whole days, as full stamps rather than bare dates, so every window in the
+// app is expressed the same way.
+function dayWindows(from, to) {
+  const out = [], end = wallDay(to);
+  for (let d = wallDay(from); d && d <= end; d = addDays(d, 1))
+    out.push({ ...winOf(d, addDays(d, 1)), day: iso(d) });
   return out;
 }
 
 function buckets(from, to, size) {
   if (size === "heat") return heatWindows(from, to);
-  const out = []; const end = new Date(to); let cur = new Date(from);
+  if (size === "day") return dayWindows(from, to);
+  const out = [], end = wallDay(to);
+  let cur = wallDay(from);
+  if (!cur || !end) return out;
   while (cur <= end) {
-    const next = new Date(cur);
-    if (size === "day") next.setDate(next.getDate() + 1);
-    else if (size === "week") next.setDate(next.getDate() + 7);
-    else next.setMonth(next.getMonth() + 1);
-    out.push({ from: iso(cur), to: iso(next > end ? new Date(+end + 864e5) : next) });
+    const next = size === "week" ? addDays(cur, 7)
+      : (() => { const n = new Date(+cur); n.setUTCMonth(n.getUTCMonth() + 1); return n; })();
+    out.push(winOf(cur, next > end ? addDays(end, 1) : next));
     cur = next;
   }
   return out;
 }
 
-/* Who you actually came with.
+/* ----------------------------- favourites ----------------------------
  *
  * There is no account and no server, so "our group" cannot be anything but a
  * list this browser remembers. Names are the only handle the API gives — they
  * are registration nicknames, stable enough for an evening and for a season of
- * driving with the same people.
- */
-const FAVS = "praga.favs";
+ * driving with the same people. */
+const favKey = (name) => norm(name).toLowerCase();
 
 function favs() {
   try { return new Set(JSON.parse(localStorage.getItem(FAVS) || "[]")); }
@@ -175,71 +242,169 @@ function favs() {
 }
 
 function toggleFav(name) {
-  const set = favs(), k = (name || "").toLowerCase();
+  const set = favs(), k = favKey(name);
   if (!k) return;
   set.has(k) ? set.delete(k) : set.add(k);
   try { localStorage.setItem(FAVS, JSON.stringify([...set])); } catch { /* private mode */ }
 }
 
-const isFav = (set, name) => set.has((name || "").toLowerCase());
+const isFav = (set, name) => set.has(favKey(name));
 
-const escaped = (t) => { const d = document.createElement("div"); d.textContent = t || ""; return d.innerHTML; };
+/* ----------------------------- record list ---------------------------- */
 
-function renderList(el, rows, highlight) {
+function renderList(el, rows, opts = {}) {
+  const { renumber = false, focus = "", plainWhen = false, favOnly = false } = opts;
   const set = favs();
-  if (el.dataset.favOnly === "1") rows = rows.filter((r) => isFav(set, r.participant));
+  if (favOnly) rows = rows.filter((r) => isFav(set, r.participant));
   if (!rows.length) {
-    el.innerHTML = `<div class="empty">${el.dataset.favOnly === "1"
+    el.innerHTML = `<div class="empty">${favOnly
       ? "Nikdo z oblíbených tu není. Označ lidi hvězdičkou v seznamu."
       : "Nic tu není. Zkus širší rozsah."}</div>`;
     return;
   }
+  const focusKey = favKey(focus);
   el.innerHTML = rows.map((r, i) => {
     // Ranking within a filtered list is renumbered, so a starred group reads
     // as its own leaderboard rather than as gaps in somebody else's.
-    const rank = highlight || el.dataset.favOnly === "1" ? i + 1 : (r.position ?? i + 1);
-    const on = isFav(set, r.participant);
-    return `<div class="rec" data-top="${rank === 1 ? 1 : 0}">
+    const rank = renumber || favOnly ? i + 1 : (r.position ?? i + 1);
+    const name = norm(r.participant);
+    const on = isFav(set, name);
+    const w = wall(r.date);
+    const when = plainWhen
+      ? `<span class="when">${w ? esc(hhmm(w)) : ""}</span>`
+      : `<button class="when" data-at="${esc(r.date)}" data-who="${esc(name)}"
+           title="Ukázat celou tuhle jízdu">${esc(czDate(r.date))}</button>`;
+    return `<div class="rec" data-top="${rank === 1 ? 1 : 0}" data-focus="${focusKey && favKey(name) === focusKey ? 1 : 0}">
       <span class="pos">${rank}</span>
-      <button class="star" data-fav="${escaped(r.participant)}" data-on="${on ? 1 : 0}"
-        title="Oblíbený">${on ? "★" : "☆"}</button>
-      <span class="who" ${highlight ? 'style="color:var(--accent)"' : ""}>${escaped(r.participant)}</span>
-      <button class="when at" data-at="${escaped(r.date)}"
-        title="Ukázat celou tuhle jízdu">${czDate(r.date)}</button>
-      <span class="score">${r.score}</span></div>`;
+      <button class="star" data-fav="${esc(name)}" data-on="${on ? 1 : 0}"
+        aria-pressed="${on}" title="Oblíbený">${on ? "★" : "☆"}</button>
+      <span class="who">${esc(name)}</span>
+      ${when}
+      <span class="score">${esc(r.score)}</span></div>`;
   }).join("");
 }
 
 // One handler per list rather than one per row: the lists are rebuilt on every
-// repaint and per-row listeners would leak with them.
-function wireStars(el, repaint) {
+// repaint and per-row listeners would leak with them. The same handler carries
+// the star toggle and the tap-through into a single heat.
+function wireList(el, repaint) {
   el.addEventListener("click", (e) => {
-    const b = e.target.closest("[data-fav]");
-    if (!b) return;
-    toggleFav(b.dataset.fav);
-    repaint();
+    const star = e.target.closest("[data-fav]");
+    if (star) { toggleFav(star.dataset.fav); repaint(); return; }
+    const at = e.target.closest("[data-at]");
+    if (at) openHeat(at.dataset.at, at.dataset.who);
   });
 }
 
-function trend(el, pts) {
-  if (pts.length < 2) { el.innerHTML = ""; return; }
-  const W = 340, H = 100, lo = Math.min(...pts.map(p => p.secs)), hi = Math.max(...pts.map(p => p.secs));
-  const span = hi - lo || 1;
-  const x = (i) => (i / (pts.length - 1)) * (W - 16) + 8;
-  const y = (s) => H - 14 - ((s - lo) / span) * (H - 32);
-  const d = pts.map((p, i) => (i ? "L" : "M") + x(i) + "," + y(p.secs)).join(" ");
-  el.innerHTML = `<svg viewBox="0 0 ${W} ${H}">
-    <path d="${d}" fill="none" stroke="var(--accent)" stroke-width="1.5"/>
-    ${pts.map((p, i) => `<circle cx="${x(i)}" cy="${y(p.secs)}" r="2.5"
-       fill="${p.secs === lo ? "var(--gold)" : "var(--accent)"}"/>`).join("")}
-    <text x="8" y="11" font-size="9" fill="var(--faint)" font-family="var(--mono)">
-      nejlepší ${lo.toFixed(3)}s</text></svg>`;
+/* ------------------------------- url state ---------------------------
+ *
+ * Every view the app can be in is a query string, so the browser's own back
+ * button is the only back button the app needs, a reload lands where you were,
+ * and a view can be sent to somebody. Query string and not a path, because
+ * GitHub Pages serves index.html for the directory and would 404 on a made-up
+ * path segment. */
+const DEFAULTS = () => ({
+  tab: "best", scg: "", heat: "", who: "",
+  from: today(), to: today(), clock: 0, ft: "00:00", tt: "23:59", max: 100, fav: 0, preset: 0,
+  q: "", df: mondayThisWeek(), dt: today(), sz: "day",
+});
+
+const PARAM = {
+  tab: "tab", scg: "scg", heat: "heat", who: "who", from: "from", to: "to",
+  clock: "t", ft: "ft", tt: "tt", max: "max", fav: "fav", preset: "p",
+  q: "q", df: "df", dt: "dt", sz: "sz",
+};
+
+const view = DEFAULTS();
+
+function readUrl() {
+  const p = new URLSearchParams(location.search), d = DEFAULTS();
+  for (const [k, name] of Object.entries(PARAM)) {
+    if (!p.has(name)) { view[k] = d[k]; continue; }
+    const raw = p.get(name);
+    view[k] = typeof d[k] === "number" ? (Number.isFinite(+raw) ? +raw : d[k]) : raw;
+  }
+  if (!["best", "driver", "live"].includes(view.tab)) view.tab = "best";
+  if (!SIZES.some(([v]) => v === view.sz)) view.sz = "day";
+  view.max = Math.min(500, Math.max(1, view.max || 100));
+}
+
+function urlSearch() {
+  const p = new URLSearchParams(), d = DEFAULTS();
+  for (const [k, name] of Object.entries(PARAM)) {
+    // Defaults stay out, so the common case is a bare URL rather than a wall
+    // of parameters that all say "unchanged".
+    if (String(view[k]) !== String(d[k]) && view[k] !== "" && view[k] != null) p.set(name, view[k]);
+  }
+  if (state.key && state.key !== DEFAULT_KEY) p.set("key", state.key);
+  const s = p.toString();
+  return s ? "?" + s : location.pathname;
+}
+
+// file:// has an opaque origin and refuses pushState; the app still works, it
+// just loses the back button there.
+function writeUrl(push) {
+  try { history[push ? "pushState" : "replaceState"]({ app: 1 }, "", urlSearch()); }
+  catch { /* opaque origin */ }
+}
+
+// One entry point for "the view changed": update the URL, then make the DOM
+// agree with it. Nothing else calls applyView directly.
+function commit(push) {
+  writeUrl(push);
+  applyView();
+}
+
+let pushedHeat = false;
+addEventListener("popstate", () => { pushedHeat = false; readUrl(); applyView(); });
+
+/* ------------------------------- apply -------------------------------- */
+
+const setVal = (id, v) => { if ($(id).value !== String(v)) $(id).value = String(v); };
+
+function applyView() {
+  const onHeat = !!view.heat;
+
+  [...$("tabs").children].forEach((b) => b.setAttribute("aria-selected", String(b.dataset.tab === view.tab)));
+  show($("tabs"), !onHeat && !!state.rscId);
+  show($("groups"), !onHeat && !!state.rscId && view.tab !== "live" && $("groups").children.length > 0);
+  ["best", "driver", "live"].forEach((k) => show($("panel-" + k), !onHeat && k === view.tab && !!state.rscId));
+  show($("panel-heat"), onHeat);
+  if (onHeat || view.tab !== "best") show($("bSticky"), false);
+
+  [...$("groups").children].forEach((c) => (c.dataset.on = c.dataset.scg === view.scg ? "1" : "0"));
+  [...$("presets").children].forEach((c) => (c.dataset.on = +c.dataset.p === view.preset ? "1" : "0"));
+
+  setVal("bFrom", view.from); setVal("bTo", view.to);
+  setVal("bFromT", view.ft); setVal("bToT", view.tt); setVal("bMax", view.max);
+  $("bClock").dataset.on = view.clock ? "1" : "0";
+  for (const el of document.querySelectorAll("#bRange .tm")) show(el, !!view.clock);
+  $("bFav").dataset.on = $("bStickyFav").dataset.on = view.fav ? "1" : "0";
+
+  setVal("dName", view.q); setVal("dFrom", view.df); setVal("dTo", view.dt);
+  [...$("dSize").children].forEach((c) => (c.dataset.on = c.dataset.s === view.sz ? "1" : "0"));
+  updateHint();
+
+  if (!state.rscId) return;
+
+  if (onHeat) { loadHeat(); return; }
+  if (view.tab === "best") {
+    describeRange();
+    if (bestSig() !== bestLoaded) loadBest();
+    else paintBest();
+  }
 }
 
 /* -------------------------------- boot ------------------------------- */
 
+function storedKey() {
+  try { return localStorage.getItem(KEY_STORE) || ""; } catch { return ""; }
+}
+
 async function boot() {
+  state.key = new URLSearchParams(location.search).get("key") || storedKey() || DEFAULT_KEY;
   $("keyInput").value = state.key;
+  show($("keyReset"), state.key !== DEFAULT_KEY);
   show($("bootErr"), false);
   $("trackName").textContent = "Načítám";
   $("trackSub").textContent = "…";
@@ -249,41 +414,43 @@ async function boot() {
     const r = state.resources[0];
     state.rscId = r.resourceId;
     $("trackName").textContent = state.key === DEFAULT_KEY ? VENUE : conn.ClientKey;
-    $("trackSub").textContent = r.name + " · okruh " + r.resourceId;
+    // The resource id meant nothing to anybody standing at the track. The
+    // track's own clock does, and it is also the honest label for every time
+    // on the page, none of which are in the reader's timezone.
+    state.venueLine = r.name;
+    tickClock();
     renderGroups(r.scoregroups || []);
-    show($("tabs"), true);
-    selectTab(state.tab);
+    applyView();
   } catch (e) {
+    state.rscId = "";
     $("trackName").textContent = "Nepřipojeno";
     $("trackSub").textContent = "";
-    $("bootErr").textContent = e.message +
+    $("bootMsg").textContent = e.message +
       " Klíč Praga zveřejňuje v odkazu na registraci na pragaarena.cz — vezmi z něj parametr ?key= a vlož ho nahoře pod „klíč“." +
       " Pokud jde o síťovou chybu, otevři stránku přes https, ne ze souboru.";
-    $("bootErr").className = "pad note bad";
     show($("bootErr"), true);
+    // The advice is "paste a key", so open the place where you paste it.
+    show($("keyPanel"), true);
+    applyView();
   }
 }
 
+function tickClock() {
+  if (!state.venueLine) return;
+  $("trackSub").textContent = state.venueLine + " · " + hhmm(nowWall());
+}
+setInterval(tickClock, 20000);
+
 function renderGroups(gs) {
   const el = $("groups");
-  if (gs.length < 2) return show(el, false);
+  if (gs.length < 2) { el.innerHTML = ""; return show(el, false); }
   el.innerHTML = `<button class="chip" data-scg="" data-on="1">Vše</button>` +
-    gs.map(g => `<button class="chip" data-scg="${g.id}" data-on="0">${g.name}</button>`).join("");
+    gs.map((g) => `<button class="chip" data-scg="${esc(g.id)}" data-on="0">${esc(g.name)}</button>`).join("");
   el.onclick = (e) => {
     const b = e.target.closest("[data-scg]"); if (!b) return;
-    state.scgId = b.dataset.scg;
-    [...el.children].forEach(c => c.dataset.on = c === b ? "1" : "0");
-    if (state.tab === "best") loadBest();
+    view.scg = b.dataset.scg;
+    commit(false);
   };
-  show(el, true);
-}
-
-function selectTab(t) {
-  state.tab = t;
-  [...$("tabs").children].forEach(b => b.setAttribute("aria-selected", b.dataset.tab === t));
-  ["best", "driver", "live"].forEach(k => show($("panel-" + k), k === t));
-  show($("groups"), t !== "live" && $("groups").children.length > 0);
-  if (t === "best" && !$("bList").children.length) loadBest();
 }
 
 /* ----------------------------- best times ---------------------------- */
@@ -294,189 +461,284 @@ const PRESETS = [
   ["Měsíc", startOfMonth], ["Rok", startOfYear], ["Vše", () => "2000-01-01"],
 ];
 
-const PRESET_DEFAULT = "Dnes";
 $("presets").innerHTML = PRESETS.map(([l], i) =>
-  `<button class="chip" data-p="${i}" data-on="${l === PRESET_DEFAULT ? 1 : 0}">${l}</button>`).join("");
+  `<button class="chip" data-p="${i}" data-on="${i === 0 ? 1 : 0}">${esc(l)}</button>`).join("");
 
 $("presets").onclick = (e) => {
   const b = e.target.closest("[data-p]"); if (!b) return;
-  [...$("presets").children].forEach(c => c.dataset.on = c === b ? "1" : "0");
-  // A preset is a span of whole days, so it also leaves the heat view.
-  rangeBefore = null;
-  show($("bBack"), false);
-  setClock(false);
-  $("bFrom").value = PRESETS[+b.dataset.p][1]();
-  $("bTo").value = shiftDays(0);
-  loadBest();
+  view.preset = +b.dataset.p;
+  view.clock = 0;
+  view.from = PRESETS[view.preset][1]();
+  view.to = shiftDays(0);
+  commit(false);
 };
 
-// Kept so starring somebody can repaint the list without asking again.
-let bestRows = [];
+let bestRows = [], bestLoaded = null, bestAt = 0;
 
-const withTime = () => $("bClock").dataset.on === "1";
+const bestSig = () => JSON.stringify([view.from, view.to, view.clock, view.ft, view.tt, view.max, view.scg]);
 
 /* Our own time field rather than the browser's.
  *
  * A datetime-local input is drawn by the browser in the browser's language,
- * which is not something a page can override — not with lang on the document,
- * not with lang on the input. On an English-language browser that means AM/PM
- * and a field too wide for a phone. Four digits and a colon are the same in
- * every locale.
- */
-function clockTime(el, fallback) {
-  const digits = (el.value || "").replace(/\D/g, "");
+ * which is not something a page can override. On an English-language browser
+ * that means AM/PM and a field too wide for a phone. Four digits and a colon
+ * are the same in every locale. */
+function clockTime(value, fallback) {
+  const digits = String(value || "").replace(/\D/g, "");
   if (digits.length < 3) return fallback;
   const h = Math.min(23, +digits.slice(0, digits.length - 2));
   const m = Math.min(59, +digits.slice(-2));
   return pad(h) + ":" + pad(m);
 }
 
-// Tidied when you leave the field, so "2035" and "20.35" both become 20:35.
-for (const id of ["bFromT", "bToT"]) {
-  $(id).addEventListener("blur", () => {
-    if ($(id).value.trim()) $(id).value = clockTime($(id), $(id).placeholder);
-  });
-}
-
 /* "Do" means what it says.
  *
  * The API's endDate is exclusive, which is why this field used to hold
  * tomorrow's date and nobody could tell whether a range included its last day.
- * The field is inclusive now and the exclusive end is worked out here — and
+ * The field is inclusive and the exclusive end is worked out here — and
  * because a day with no time given runs to 23:59, both cases are the same
- * sum: take the last minute wanted and add one.
- */
+ * sum: take the last minute wanted and add one. */
 function apiRange() {
-  const from = $("bFrom").value + "T" +
-    (withTime() ? clockTime($("bFromT"), "00:00") : "00:00") + ":00";
-  const lastMinute = withTime() ? clockTime($("bToT"), "23:59") : "23:59";
-  const end = new Date($("bTo").value + "T" + lastMinute + ":00");
-  end.setMinutes(end.getMinutes() + 1);
-  return { from, to: stamp(end), lastMinute };
+  const firstMinute = view.clock ? clockTime(view.ft, "00:00") : "00:00";
+  const lastMinute = view.clock ? clockTime(view.tt, "23:59") : "23:59";
+  const start = wall(view.from + "T" + firstMinute + ":00");
+  const end = wall(view.to + "T" + lastMinute + ":00");
+  return {
+    ok: !!(start && end && start <= end),
+    filled: !!(start && end),
+    from: start && stamp(start),
+    to: end && stamp(addMin(end, 1)),
+    endsAfter: end && addMin(end, 1),
+    firstMinute, lastMinute,
+  };
 }
 
 // Says out loud what was asked for, because a range with times in it is not
 // something you can read off two input boxes at a glance.
 function describeRange() {
   const r = apiRange();
-  const cz = (d, t) => d.split("-").reverse().map(Number).join(".") + (withTime() ? " " + t : "");
-  $("bWhat").textContent =
-    `${cz($("bFrom").value, r.from.slice(11, 16))} — ${cz($("bTo").value, r.lastMinute)} včetně`;
+  const cz = (d, t) => (/^\d{4}-\d{2}-\d{2}$/.test(d) ? d.split("-").reverse().map(Number).join(".") : "?")
+    + (view.clock ? " " + t : "");
+  const text = `${cz(view.from, r.firstMinute)} — ${cz(view.to, r.lastMinute)} včetně`
+    + (autoRefreshes() ? " · obnovuje se" : "");
+  $("bWhat").textContent = text;
+  $("bStickyWhat").textContent = text;
 }
 
-async function loadBest() {
+const paintBest = () =>
+  renderList($("bList"), bestRows, { favOnly: !!view.fav });
+
+async function loadBest(quiet) {
+  const sig = bestSig();
+  const r = apiRange();
   show($("bErr"), false);
   describeRange();
-  $("bList").innerHTML = '<div class="empty">Načítám…</div>';
-  try {
-    const r = apiRange();
-    bestRows = await records({
-      rscId: state.rscId, scgId: state.scgId,
-      from: r.from, to: r.to, max: +$("bMax").value || 100,
-    });
-    renderList($("bList"), bestRows, false);
-  } catch (e) {
+  if (!r.ok) {
+    // Not marked as loaded: an unusable range should keep saying so rather
+    // than fall through to the empty-list message on the next repaint.
+    bestRows = []; bestLoaded = null;
     $("bList").innerHTML = "";
+    $("bErr").textContent = r.filled ? "„Do“ je dřív než „Od“. Prohoď je." : "Doplň oba dny.";
+    return show($("bErr"), true);
+  }
+  bestLoaded = sig;
+  if (!quiet) $("bList").innerHTML = '<div class="empty">Načítám…</div>';
+  try {
+    const rows = await query({ from: r.from, to: r.to, max: view.max });
+    if (bestSig() !== sig) return; // the view moved on while this was in flight
+    bestRows = rows;
+    bestAt = Date.now();
+    paintBest();
+  } catch (e) {
+    if (bestSig() !== sig) return;
+    bestLoaded = null;
+    bestAt = Date.now();   // an error must not turn the auto-refresh into a hammer
+    if (!quiet) $("bList").innerHTML = "";
     $("bErr").textContent = e.message;
     show($("bErr"), true);
   }
 }
 
-wireStars($("bList"), () => renderList($("bList"), bestRows, false));
+wireList($("bList"), paintBest);
 
-$("bFav").onclick = () => {
-  const el = $("bList");
-  const on = el.dataset.favOnly !== "1";
-  el.dataset.favOnly = on ? "1" : "0";
-  $("bFav").dataset.on = on ? "1" : "0";
-  renderList(el, bestRows, false);
-};
+const toggleFavOnly = () => { view.fav = view.fav ? 0 : 1; commit(false); };
+$("bFav").onclick = toggleFavOnly;
+$("bStickyFav").onclick = toggleFavOnly;
 
-// The time is the rare case, so it stays out of the way until asked for.
-function setClock(on) {
-  $("bClock").dataset.on = on ? "1" : "0";
-  for (const el of document.querySelectorAll("#bRange .tm")) show(el, on);
-  if (on && !$("bFromT").value) $("bFromT").value = "00:00";
-  if (on && !$("bToT").value) $("bToT").value = "23:59";
-  describeRange();
+$("bClock").onclick = () => { view.clock = view.clock ? 0 : 1; view.preset = -1; commit(false); };
+
+// Typing in a filter loads the result; the button is a refresh, not a submit.
+let typeTimer = null;
+function fromInputs(delay) {
+  clearTimeout(typeTimer);
+  typeTimer = setTimeout(() => {
+    view.from = $("bFrom").value; view.to = $("bTo").value;
+    view.ft = clockTime($("bFromT").value, "00:00");
+    view.tt = clockTime($("bToT").value, "23:59");
+    view.max = Math.min(500, Math.max(1, +$("bMax").value || 100));
+    view.preset = -1;
+    commit(false);
+  }, delay);
+}
+for (const id of ["bFrom", "bTo", "bMax"]) $(id).addEventListener("change", () => fromInputs(0));
+for (const id of ["bFromT", "bToT"]) {
+  // Tidied when you leave the field, so "2035" and "20.35" both become 20:35.
+  $(id).addEventListener("blur", () => fromInputs(0));
+  $(id).addEventListener("change", () => fromInputs(0));
+}
+// Refreshing a list you are already reading should not blank it and drop you
+// back at the top of the page; the rows stay until the new ones arrive.
+const refreshBest = () => { bestLoaded = null; loadBest(bestRows.length > 0); };
+$("bGo").onclick = refreshBest;
+$("bStickyGo").onclick = refreshBest;
+$("bStickyWhat").onclick = () => $("bFilters").scrollIntoView({ behavior: "smooth", block: "start" });
+
+/* A range that runs up to now is a range that changes while you look at it —
+ * you have just come off the track and your lap is not on the board yet. */
+const REFRESH_EVERY = 30000;
+
+function autoRefreshes() {
+  const r = apiRange();
+  return !!(r.ok && view.tab === "best" && !view.heat && r.endsAfter >= nowWall());
 }
 
-$("bClock").onclick = () => { setClock(!withTime()); loadBest(); };
+setInterval(() => {
+  if (document.hidden || !state.rscId || !autoRefreshes()) return;
+  if (Date.now() - bestAt < REFRESH_EVERY) return;
+  loadBest(true);
+}, 5000);
 
-/* Tap a time to see the heat it belongs to.
+// The filters are a screenful on a phone, so once they are scrolled away a
+// compact bar carries the two things you still need: what you are looking at,
+// and a way to refresh it.
+if ("IntersectionObserver" in window) {
+  new IntersectionObserver(
+    ([e]) => show($("bSticky"), !e.isIntersecting && view.tab === "best" && !view.heat),
+    { threshold: 0 },
+  ).observe($("bFilters"));
+}
+
+/* -------------------------------- heat -------------------------------
  *
- * "Who did I drive with" is the question this page could not answer without
- * typing two timestamps, and typing them is exactly what nobody does standing
- * in the paddock. Six minutes either side of the lap is the whole heat and
- * usually nothing else; heats do not start on a grid, so the odd neighbour
- * from the session before can slip in. Better that than missing half a heat.
- */
+ * A heat is a view of its own, not a rearrangement of the leaderboard's
+ * filters. The old version rewrote the date range in the "best times" tab and
+ * offered a bespoke "back to range" button, which left you on a tab you had
+ * not asked for, with a back button that did not go back where you came from.
+ * Now the heat is a URL of its own on top of whatever you were doing, and
+ * "back" is the browser's own — from the driver page it returns to the driver
+ * page, results and all. */
 const HEAT_ZOOM = 6;
 
-let rangeBefore = null;
+let heatLoaded = null, heatRows = [];
 
-const fields = () => [$("bFrom"), $("bFromT"), $("bTo"), $("bToT")];
+function openHeat(at, who) {
+  if (!wall(at)) return;
+  view.heat = at;
+  view.who = who || "";
+  pushedHeat = true;
+  commit(true);
+}
 
-function zoomToHeat(when) {
-  const t = new Date(when);
-  if (isNaN(+t)) return;
-  if (!rangeBefore) {
-    rangeBefore = { clock: withTime(), vals: fields().map((el) => el.value) };
+const paintHeat = () => renderList($("hList"), heatRows, { focus: view.who, plainWhen: true });
+
+async function loadHeat() {
+  const t = wall(view.heat);
+  if (!t) return;
+  const a = addMin(t, -HEAT_ZOOM), b = addMin(t, HEAT_ZOOM);
+  $("hTitle").textContent = "Jízda " + hhmm(t);
+  $("hSub").textContent = czDay(view.heat) + " · okno " + hhmm(a) + "–" + hhmm(b);
+  const sig = view.heat + "|" + view.scg;
+  if (heatLoaded === sig) return paintHeat();
+  show($("hErr"), false);
+  $("hList").innerHTML = '<div class="empty">Načítám…</div>';
+  try {
+    const rows = await query({ from: stamp(a), to: stamp(b), max: 200 });
+    if (view.heat + "|" + view.scg !== sig) return;
+    heatLoaded = sig; heatRows = rows;
+    paintHeat();
+  } catch (e) {
+    $("hList").innerHTML = "";
+    $("hErr").textContent = e.message;
+    show($("hErr"), true);
   }
-  // No preset describes one heat, so stop claiming one does.
-  [...$("presets").children].forEach((c) => (c.dataset.on = "0"));
-  setClock(true);
-  const a = new Date(+t - HEAT_ZOOM * 60000), b = new Date(+t + HEAT_ZOOM * 60000);
-  $("bFrom").value = iso(a); $("bFromT").value = stamp(a).slice(11, 16);
-  $("bTo").value = iso(b);   $("bToT").value = stamp(b).slice(11, 16);
-  show($("bBack"), true);
-  selectTab("best");
-  loadBest();
 }
 
-$("bBack").onclick = () => {
-  if (!rangeBefore) return;
-  // Values after the switch: setClock fills empty time fields with defaults.
-  setClock(rangeBefore.clock);
-  fields().forEach((el, i) => (el.value = rangeBefore.vals[i]));
-  rangeBefore = null;
-  show($("bBack"), false);
-  loadBest();
+wireList($("hList"), paintHeat);
+
+$("hBack").onclick = () => {
+  // Same thing the browser's back does, so the two cannot disagree. A heat
+  // opened from a pasted link has nothing behind it, so it closes in place.
+  if (pushedHeat) history.back();
+  else { view.heat = ""; view.who = ""; commit(false); }
 };
-
-for (const id of ["bList", "dList"]) {
-  $(id).addEventListener("click", (e) => {
-    const b = e.target.closest("[data-at]");
-    if (b) zoomToHeat(b.dataset.at);
-  });
-}
 
 /* ---------------------------- driver hunt ---------------------------- */
 
 const SIZES = [
   ["heat", "Po jízdách"], ["day", "Po dnech"], ["week", "Po týdnech"], ["month", "Po měsících"],
 ];
-let dGranularity = "day";
 $("dSize").innerHTML = SIZES.map(([v, l]) =>
-  `<button class="chip" data-s="${v}" data-on="${v === dGranularity ? 1 : 0}">${l}</button>`).join("");
+  `<button class="chip" data-s="${v}" data-on="${v === "day" ? 1 : 0}">${esc(l)}</button>`).join("");
 $("dSize").onclick = (e) => {
   const b = e.target.closest("[data-s]"); if (!b) return;
-  dGranularity = b.dataset.s;
-  [...$("dSize").children].forEach(c => c.dataset.on = c === b ? "1" : "0");
-  updateHint();
+  view.sz = b.dataset.s;
+  commit(false);
 };
-
-function updateHint() {
-  const n = buckets($("dFrom").value, $("dTo").value, dGranularity).length;
-  const heat = dGranularity === "heat"
-    ? ` Po jízdách se ptá jen na otevírací dobu (${OPEN_FROM}–${OPEN_TO} h), po ${HEAT_MINUTES} minutách.`
-    : "";
-  $("dHint").textContent =
-    `API vrací jeden nejlepší čas na jezdce za dotázané okno, takže jemnější dělení znamená hustší historii a víc dotazů.` +
-    ` Teď ${n}, po ${PARALLEL} současně.${heat}`;
-  return n;
+for (const id of ["dFrom", "dTo", "dName"]) {
+  $(id).addEventListener("change", () => {
+    view.q = $("dName").value; view.df = $("dFrom").value; view.dt = $("dTo").value;
+    commit(false);
+  });
 }
-["dFrom", "dTo"].forEach(id => $(id).addEventListener("change", updateHint));
+
+/* The coarse-to-fine scan.
+ *
+ * Asking about every nine minutes of every day is how you find the individual
+ * heats, and it is also ninety-odd requests per day spent almost entirely on
+ * windows where the name never appears. So the scan narrows instead:
+ *
+ *   1. one request per day
+ *   2. for the days the name turns up in, one request per three-hour block
+ *   3. nine-minute windows over the hot blocks, padded generously
+ *
+ * Nothing is lost by narrowing. The API answers a window with each
+ * participant's best time inside it, so a driver who turned a single lap
+ * anywhere in a block appears in that block's answer — a block is either hot
+ * or provably empty. Every hot block is then tiled in full, plus an hour of
+ * slack on each side, plus half an hour around every timestamp already found.
+ * The slack is what makes it safe: heats sit near block edges, and the day and
+ * block passes both cover the whole 24 hours rather than the opening hours, so
+ * a session outside them is still found. Only the final tiling is bounded by
+ * what the coarse passes actually turned up. */
+const PROBE_BLOCK = 180;
+const PROBE_PAD = 60;
+const SEED_PAD = 30;
+const FINE_CAP = 1500;
+
+function dayBlocks(dayIso) {
+  const d = wallDay(dayIso), out = [];
+  for (let m = 0; m < 24 * 60; m += PROBE_BLOCK) out.push(winOf(addMin(d, m), addMin(d, Math.min(m + PROBE_BLOCK, 24 * 60))));
+  return out;
+}
+
+function mergeRanges(rs) {
+  const sorted = rs.filter((r) => r.a && r.b).sort((x, y) => x.a - y.a);
+  const out = [];
+  for (const r of sorted) {
+    const last = out[out.length - 1];
+    if (last && r.a <= last.b) last.b = new Date(Math.max(+last.b, +r.b));
+    else out.push({ a: new Date(+r.a), b: new Date(+r.b) });
+  }
+  return out;
+}
+
+function tile(regions, minutes) {
+  const out = [];
+  for (const r of regions)
+    for (let t = new Date(+r.a); t < r.b; t = addMin(t, minutes))
+      out.push(winOf(t, addMin(t, minutes)));
+  return out;
+}
 
 let scanRun = 0;
 let dFound = [];
@@ -487,78 +749,174 @@ function idleScanButton() {
   $("dGo").textContent = "Projet";
 }
 
+function updateHint() {
+  const days = dayWindows($("dFrom").value, $("dTo").value).length;
+  $("dHint").textContent = view.sz === "heat"
+    ? `Po jízdách projede nejdřív ${days} dní, pak jen v zasažených dnech tříhodinové bloky`
+      + ` a nakonec devítiminutová okna kolem nich — jemně se ptá jen tam, kde se jméno objevilo.`
+    : `API vrací jeden nejlepší čas na jezdce za dotázané okno, takže jemnější dělení znamená hustší historii a víc dotazů.`
+      + ` Teď ${buckets($("dFrom").value, $("dTo").value, view.sz).length}, po ${PARALLEL} současně.`;
+}
+
 $("dGo").onclick = async () => {
   // Second click while running means stop. Bumping the id makes the live
   // loop bail on its next check, so no two scans can ever share the list.
   if ($("dGo").dataset.running === "1") { scanRun++; idleScanButton(); return; }
 
-  const needle = $("dName").value.trim().toLowerCase();
+  const needle = norm($("dName").value).toLowerCase();
   show($("dErr"), false);
-  if (!needle) { $("dErr").textContent = "Napiš aspoň část jména."; return show($("dErr"), true); }
-
-  const wins = buckets($("dFrom").value, $("dTo").value, dGranularity);
-  // Raised now that windows go out in parallel: a week by heat is ~660 of them
-  // and finishes in well under a minute.
-  if (wins.length > 1500) {
-    $("dErr").textContent = `Přes 1500 kroků (${wins.length}). Zvol hrubší dělení nebo kratší rozsah.`;
-    return show($("dErr"), true);
-  }
+  const fail = (m) => { $("dErr").textContent = m; show($("dErr"), true); };
+  if (!needle) return fail("Napiš aspoň část jména.");
+  const a = wallDay($("dFrom").value), b = wallDay($("dTo").value);
+  if (!a || !b) return fail("Doplň oba dny.");
+  if (a > b) return fail("„Do“ je dřív než „Od“. Prohoď je.");
 
   const run = ++scanRun;
+  const alive = () => run === scanRun;
   $("dGo").dataset.running = "1";
   $("dGo").classList.add("quiet");
   $("dTrend").innerHTML = "";
   $("dList").innerHTML = "";
 
   const found = dFound = [];
-  const seen = new Set(); // consecutive windows share an edge day, so drop repeats
+  const seen = new Set();   // windows overlap by design now, so drop repeats
+  const seeds = [];
+  let failed = 0, stage = "";
 
-  let done = 0, failed = 0;
+  const paint = () => renderList($("dList"),
+    [...found].sort((x, y) => (x.secs ?? 1e9) - (y.secs ?? 1e9)), { renumber: true });
+
+  const hit = (r) => {
+    const k = norm(r.participant) + "|" + r.date + "|" + r.score;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    found.push({ ...r, secs: toSeconds(r.score) });
+    const t = wall(r.date);
+    if (t) seeds.push(t);
+    return true;
+  };
+
+  // One pass over a set of windows: collects matches and reports back which
+  // windows contained any, so the next pass knows where to look closer.
+  async function probe(wins, label) {
+    const hot = [];
+    let done = 0;
+    await pool(wins, async (w) => {
+      if (!alive()) return;
+      let recs;
+      try { recs = await query({ from: w.from, to: w.to, max: 2000 }); }
+      catch { failed++; return; }
+      if (!alive()) return;
+      let added = 0, any = false;
+      for (const r of recs) {
+        if (!norm(r.participant).toLowerCase().includes(needle)) continue;
+        any = true;
+        if (hit(r)) added++;
+      }
+      if (any) hot.push(w);
+      $("dGo").textContent = `Zastavit — ${label} ${++done}/${wins.length}, nalezeno ${found.length}`;
+      // Only repaint when something actually changed, otherwise it flickers.
+      if (added) paint();
+    });
+    return hot;
+  }
 
   try {
-    // One window failing does not end the scan. Over hundreds of requests a
-    // stray timeout is ordinary, and throwing away everything already found
-    // because of one would be the wrong trade.
-    await pool(wins, async (win) => {
-      if (run !== scanRun) return;
-      let recs;
-      try {
-        recs = await records({
-          rscId: state.rscId, scgId: state.scgId, from: win.from, to: win.to, max: 2000,
-        });
-      } catch { failed++; return; }
-      if (run !== scanRun) return;
+    if (view.sz !== "heat") {
+      const wins = buckets($("dFrom").value, $("dTo").value, view.sz);
+      if (wins.length > FINE_CAP) throw new Error(`Přes ${FINE_CAP} kroků (${wins.length}). Zvol hrubší dělení nebo kratší rozsah.`);
+      await probe(wins, "okna");
+    } else {
+      stage = "dny";
+      const hotDays = await probe(dayWindows($("dFrom").value, $("dTo").value), "dny");
+      if (!alive()) return;
 
-      let added = 0;
-      for (const r of recs) {
-        if (!(r.participant || "").toLowerCase().includes(needle)) continue;
-        const k = r.participant + "|" + r.date + "|" + r.score;
-        if (seen.has(k)) continue;
-        seen.add(k);
-        found.push({ ...r, secs: toSeconds(r.score) });
-        added++;
-      }
-      $("dGo").textContent = `Zastavit — ${++done}/${wins.length}, nalezeno ${found.length}`;
-      // Only repaint when something actually changed, otherwise it flickers.
-      if (added) renderList($("dList"), [...found].sort((a, b) => (a.secs ?? 1e9) - (b.secs ?? 1e9)), true);
-    });
+      stage = "bloky";
+      const hotBlocks = hotDays.length
+        ? await probe(hotDays.flatMap((d) => dayBlocks(d.day)), "bloky")
+        : [];
+      if (!alive()) return;
 
-    if (run !== scanRun) return;
+      const regions = mergeRanges([
+        ...hotBlocks.map((w) => ({ a: addMin(w.a, -PROBE_PAD), b: addMin(w.b, PROBE_PAD) })),
+        ...seeds.map((t) => ({ a: addMin(t, -SEED_PAD), b: addMin(t, SEED_PAD) })),
+      ]);
+      const fine = tile(regions, HEAT_MINUTES);
+      if (fine.length > FINE_CAP) throw new Error(`Vyšlo z toho ${fine.length} jemných oken, což je moc. Zkrať rozsah.`);
+      stage = "jízdy";
+      if (fine.length) await probe(fine, "jízdy");
+    }
 
-    trend($("dTrend"), found.filter(f => f.secs != null)
-      .sort((a, b) => new Date(a.date) - new Date(b.date)));
+    if (!alive()) return;
+
+    trend($("dTrend"), found.filter((f) => f.secs != null)
+      .sort((x, y) => wall(x.date) - wall(y.date)));
     if (!found.length)
       $("dList").innerHTML = '<div class="empty">Nic. Jména jsou přezdívky z registrace, zkus kratší kus.</div>';
-    if (failed) {
-      $("dErr").textContent = `${failed} z ${wins.length} oken se nepodařilo načíst; zbytek je výš.`;
-      show($("dErr"), true);
-    }
+    else paint();
+    if (failed) fail(`${failed} oken se nepodařilo načíst${stage ? " (fáze " + stage + ")" : ""}; zbytek je výš.`);
   } catch (e) {
-    if (run === scanRun) { $("dErr").textContent = e.message; show($("dErr"), true); }
+    if (alive()) fail(e.message);
   } finally {
-    if (run === scanRun) idleScanButton();
+    if (alive()) idleScanButton();
   }
 };
+
+wireList($("dList"), () => renderList($("dList"),
+  [...dFound].sort((x, y) => (x.secs ?? 1e9) - (y.secs ?? 1e9)), { renumber: true }));
+
+/* ------------------------------- trend -------------------------------
+ *
+ * Points are evenly spaced by session rather than by date: the question is
+ * "am I getting quicker", and a three-month gap drawn to scale would squash
+ * everything worth reading into the right-hand edge. The axes say what the
+ * numbers are — a line with no scale on it is decoration. */
+const CH = { w: 340, h: 150, l: 40, r: 10, t: 12, b: 22 };
+
+function trend(el, pts) {
+  if (pts.length < 2) { el.innerHTML = ""; return; }
+  const secs = pts.map((p) => p.secs);
+  const lo = Math.min(...secs), hi = Math.max(...secs);
+  // A flat set of times would otherwise divide by zero and draw on the axis.
+  const span = hi - lo || Math.max(0.5, lo * 0.01);
+  const top = hi + span * 0.12, bottom = lo - span * 0.12;
+  const x = (i) => CH.l + (i / (pts.length - 1)) * (CH.w - CH.l - CH.r);
+  const y = (s) => CH.t + ((top - s) / (top - bottom)) * (CH.h - CH.t - CH.b);
+
+  const ticks = [lo, (lo + hi) / 2, hi];
+  const grid = ticks.map((s) => `
+    <line x1="${CH.l}" y1="${y(s).toFixed(1)}" x2="${CH.w - CH.r}" y2="${y(s).toFixed(1)}"
+      stroke="var(--line)" stroke-width="1"/>
+    <text x="${CH.l - 6}" y="${(y(s) + 3).toFixed(1)}" text-anchor="end">${s.toFixed(3)}</text>`).join("");
+
+  // Three date labels at most: the ends always, the middle when it fits.
+  const at = pts.length > 3 ? [0, Math.floor((pts.length - 1) / 2), pts.length - 1] : [0, pts.length - 1];
+  const dates = [...new Set(at)].map((i) => {
+    const d = wall(pts[i].date);
+    const anchor = i === 0 ? "start" : i === pts.length - 1 ? "end" : "middle";
+    return `<text x="${x(i).toFixed(1)}" y="${CH.h - 6}" text-anchor="${anchor}">${d ? d.getUTCDate() + "." + (d.getUTCMonth() + 1) + "." : ""}</text>`;
+  }).join("");
+
+  const path = pts.map((p, i) => (i ? "L" : "M") + x(i).toFixed(1) + "," + y(p.secs).toFixed(1)).join(" ");
+
+  el.innerHTML = `<svg viewBox="0 0 ${CH.w} ${CH.h}" preserveAspectRatio="xMidYMid meet" role="img"
+      aria-label="Vývoj časů, nejlepší ${lo.toFixed(3)} s">
+    <g class="axis">${grid}${dates}</g>
+    <line x1="${CH.l}" y1="${CH.t}" x2="${CH.l}" y2="${CH.h - CH.b}" stroke="var(--line)"/>
+    <path d="${path}" fill="none" stroke="var(--accent)" stroke-width="1.5"/>
+    ${pts.map((p, i) => `<circle cx="${x(i).toFixed(1)}" cy="${y(p.secs).toFixed(1)}" r="2.5"
+       fill="${p.secs === lo ? "var(--gold)" : "var(--accent)"}"/>`).join("")}
+    ${pts.map((p, i) => `<circle class="tap" cx="${x(i).toFixed(1)}" cy="${y(p.secs).toFixed(1)}" r="10"
+       fill="transparent" data-at="${esc(p.date)}" data-who="${esc(norm(p.participant))}"
+       ><title>${esc(czDate(p.date))} · ${esc(p.score)}</title></circle>`).join("")}
+  </svg>`;
+}
+
+// The points are the same doorway into a heat as a timestamp in a list.
+$("dTrend").addEventListener("click", (e) => {
+  const c = e.target.closest("[data-at]");
+  if (c) openHeat(c.dataset.at, c.dataset.who);
+});
 
 /* -------------------------------- live ------------------------------- */
 
@@ -569,9 +927,6 @@ $("dGo").onclick = async () => {
  *
  *   session   N name · C milliseconds left · L laps left · S/E running or not
  *   driver    P position · N name · K kart · L laps · B best · T last · A average · G gap
- *
- * The old view printed the first five values of each driver and nothing else,
- * which came out as LP, A, B, K, G — four numbers and a string, unlabelled.
  */
 
 // 67889 -> "1:07.889", 43010 -> "43.010"
@@ -593,19 +948,18 @@ function clock(ms) {
   return Math.floor(t / 60) + ":" + String(t % 60).padStart(2, "0");
 }
 
-function renderLive(d) {
-  const drivers = Array.isArray(d.D) ? d.D : [];
-  const running = d.S === 1 && drivers.length > 0;
+function renderLive(d, ended) {
+  // The feed's own order is not a promise. Position is a field, so sort by it
+  // and the tower cannot be wrong even if a push arrives out of order.
+  const drivers = (Array.isArray(d.D) ? [...d.D] : [])
+    .sort((a, b) => (a.P ?? 1e9) - (b.P ?? 1e9));
+  const running = !ended && d.S === 1 && drivers.length > 0;
 
   $("lHead").dataset.live = running ? "1" : "0";
   $("lName").textContent = d.N || "Jízda";
   // Laps-limited heats count laps, timed ones count down; show whichever the
   // heat is actually being run to.
   $("lClock").textContent = d.L > 0 ? d.L + " kol" : clock(d.C);
-  // The clock already says how much heat is left; repeating that as a word
-  // next to it ("zbývá") was saying the same thing twice. Only worth a word
-  // when the heat has actually ended, since a stopped "0:00" reads the same
-  // as a running one otherwise.
   $("lSub").textContent = [
     drivers.length ? drivers.length + " na trati" : "",
     running ? "" : "dojeto",
@@ -631,98 +985,228 @@ function renderLive(d) {
       : r.T === fastest ? "purple"
       : r.T === r.B ? "green"
       : "yellow";
-    // The feed pads names to a fixed width; two spaces mid-name is not a name.
-    const name = String(r.N || "").replace(/\s+/g, " ").trim();
+    const name = norm(r.N);
     // An anonymous driver is named after the kart, so the badge would print
     // the same number twice.
     const badge = r.K && !name.endsWith(" " + r.K)
-      ? `<span class="kart">${escaped(r.K)}</span>` : "";
+      ? `<span class="kart">${esc(r.K)}</span>` : "";
     const on = isFav(set, name);
     return `<tr data-mark="${mark}" data-fav="${on ? 1 : 0}">
       <td class="c-pos"><span class="poscell">
-        <button class="star" data-fav="${escaped(name)}" data-on="${on ? 1 : 0}"
-          title="Oblíbený">${on ? "★" : "☆"}</button>${r.P ?? ""}
+        <button class="star" data-fav="${esc(name)}" data-on="${on ? 1 : 0}"
+          aria-pressed="${on}" title="Oblíbený">${on ? "★" : "☆"}</button>${esc(r.P ?? "")}
       </span></td>
       <td class="c-kart">${badge}</td>
-      <td class="c-who">${escaped(name)}</td>
+      <td class="c-who">${esc(name)}</td>
       <td class="c-time last">${lap(r.T)}</td>
       <td class="c-time">${lap(r.B)}</td>
-      <td class="c-gap">${gap(r.G)}</td>
-      <td class="c-laps">${r.L ?? 0}</td>
+      <td class="c-gap">${esc(gap(r.G))}</td>
+      <td class="c-laps">${esc(r.L ?? 0)}</td>
     </tr>`;
   }).join("");
 }
 
-wireStars($("lList"), () => state.live && renderLive(state.live));
+$("lList").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-fav]");
+  if (!b) return;
+  toggleFav(b.dataset.fav);
+  if (LIVE.shown) renderLive(LIVE.shown.data, LIVE.shown.ended);
+});
 
-$("lGo").onclick = async () => {
-  if (state.sock) {
-    state.sock.close(); state.sock = null;
-    $("lGo").textContent = "Připojit"; $("lGo").classList.remove("quiet");
-    return;
-  }
-  $("lGo").textContent = "Připojuji…";
+/* A socket that is only ever opened once is a socket that is open until the
+ * first tunnel, then silently dead with a stale heat on screen. Wanting the
+ * feed and having it are separate things: `want` survives a drop, the socket
+ * does not, and everything in between is retries. */
+const LIVE = { sock: null, want: false, tries: 0, timer: null, settings: null,
+  last: null, shown: null, msgs: 0, seenAt: 0, watch: null, raw: null };
+
+const BACKOFF = [1000, 2000, 4000, 8000, 15000];
+// Long enough that a quiet track is not mistaken for a dead socket, short
+// enough that a phone coming back from a tunnel does not sit there stale.
+const SILENCE = 120000;
+
+function liveNote(text, bad) {
+  $("lNote").textContent = text || "";
+  $("lNote").className = "note" + (bad ? " bad" : "");
+  show($("lNote"), !!text);
+}
+
+function liveButton() {
+  const open = LIVE.sock && LIVE.sock.readyState === 1;
+  $("lGo").textContent = !LIVE.want ? "Připojit" : open ? "Odpojit" : "Připojuji…";
+  $("lGo").classList.toggle("quiet", LIVE.want);
+}
+
+function liveStop() {
+  LIVE.want = false;
+  clearTimeout(LIVE.timer); LIVE.timer = null;
+  clearInterval(LIVE.watch); LIVE.watch = null;
+  const s = LIVE.sock; LIVE.sock = null;
+  if (s) { s.onclose = null; try { s.close(); } catch { /* already gone */ } }
+  liveNote("");
+  liveButton();
+}
+
+function liveRetry() {
+  clearTimeout(LIVE.timer);
+  const wait = BACKOFF[Math.min(LIVE.tries++, BACKOFF.length - 1)];
+  liveNote(`Spojení přerušeno. Obnovuji za ${Math.round(wait / 1000)} s…`, true);
+  LIVE.timer = setTimeout(liveConnect, wait);
+  liveButton();
+}
+
+async function liveConnect() {
+  if (!LIVE.want || LIVE.sock) return;
   try {
     const conn = await token();
-    const s = await api(conn, "livetiming/settings", { locale: "cs", styleId: "", resourceId: state.rscId });
+    LIVE.settings ||= await api(conn, "livetiming/settings", { locale: "cs", styleId: "", resourceId: state.rscId });
+    if (!LIVE.want) return;
+    const s = LIVE.settings;
     const ws = new WebSocket(`wss://${s.liveServerHost}:${s.liveServerWssPort}`);
-    state.sock = ws;
+    LIVE.sock = ws;
+    liveButton();
     ws.onopen = () => {
-      $("lGo").textContent = "Odpojit"; $("lGo").classList.add("quiet");
+      LIVE.tries = 0; LIVE.seenAt = Date.now();
+      liveNote(""); liveButton();
       ws.send("START " + s.liveServerKey);
+      clearInterval(LIVE.watch);
+      // A socket the network dropped without telling us looks exactly like a
+      // socket with nothing to say, until you notice it has said nothing for
+      // two minutes after saying plenty.
+      LIVE.watch = setInterval(() => {
+        if (LIVE.sock === ws && LIVE.msgs > 1 && Date.now() - LIVE.seenAt > SILENCE) {
+          try { ws.close(); } catch { /* already gone */ }
+        }
+      }, 10000);
     };
-    ws.onmessage = (e) => {
-      let msg; try { msg = JSON.parse(e.data); } catch { msg = { _text: e.data }; }
-      // Not every message carries the session block — many are the driver array
-      // and a couple of counters. Merging keeps the heat name and the clock on
-      // screen instead of blanking them between updates.
-      const data = state.live = { ...(state.live || {}), ...msg };
-      $("lDump").textContent = JSON.stringify(msg, null, 2);
-      show($("lRaw"), true);
-
-      const idle = !data || !Array.isArray(data.D) || !data.D.length;
-      // Their own Czech for this is "Žádné závody běžecké" — a machine that read
-      // "running" as jogging. Ours instead.
-      $("lNote").textContent = idle ? "Zrovna nikdo nejede." : "";
-      show($("lNote"), idle);
-      if (idle) { show($("lHead"), false); show($("lTableWrap"), false); $("lList").innerHTML = ""; return; }
-      renderLive(data);
-    };
-    ws.onerror = () => {
-      $("lNote").textContent = "Spojení selhalo. Prohlížeč nemusí pustit port " + s.liveServerWssPort + ".";
-      $("lNote").className = "note bad"; show($("lNote"), true);
-    };
+    ws.onmessage = (e) => { LIVE.seenAt = Date.now(); LIVE.msgs++; onLiveMessage(e.data); };
+    ws.onerror = () => { /* a close always follows, and that is where retry lives */ };
     ws.onclose = () => {
-      state.sock = null;
-      $("lGo").textContent = "Připojit"; $("lGo").classList.remove("quiet");
+      if (LIVE.sock !== ws) return;
+      LIVE.sock = null;
+      clearInterval(LIVE.watch); LIVE.watch = null;
+      if (LIVE.want) liveRetry(); else liveButton();
     };
   } catch (e) {
-    $("lNote").textContent = e.message; $("lNote").className = "note bad"; show($("lNote"), true);
-    $("lGo").textContent = "Připojit";
+    LIVE.settings = null; LIVE.sock = null;
+    if (!LIVE.want) return liveButton();
+    liveNote(e.message, true);
+    liveRetry();
   }
+}
+
+function onLiveMessage(raw) {
+  let msg; try { msg = JSON.parse(raw); } catch { msg = { _text: String(raw) }; }
+  // Not every message carries the session block — many are the driver array
+  // and a couple of counters. Merging keeps the heat name and the clock on
+  // screen instead of blanking them between updates.
+  const data = state.live = { ...(state.live || {}), ...msg };
+  LIVE.raw = msg;
+  // Formatting a debug dump nobody is looking at, forty times a heat.
+  if (!$("lDump").classList.contains("hide")) $("lDump").textContent = JSON.stringify(msg, null, 2);
+  show($("lRaw"), true);
+
+  const live = Array.isArray(data.D) && data.D.length;
+  if (live) {
+    LIVE.last = data;
+    liveNote("");
+    LIVE.shown = { data, ended: false };
+    renderLive(data, false);
+    return;
+  }
+  // The heat ending is the moment everybody wants to read the result, which is
+  // exactly when the old version cleared the table.
+  if (LIVE.last) {
+    // Their own Czech for this is "Žádné závody běžecké" — a machine that read
+    // "running" as jogging. Ours instead.
+    liveNote("Zrovna nikdo nejede. Níž je poslední dojetá jízda.");
+    LIVE.shown = { data: LIVE.last, ended: true };
+    renderLive(LIVE.last, true);
+  } else {
+    liveNote("Zrovna nikdo nejede.");
+    LIVE.shown = null;
+    show($("lHead"), false); show($("lTableWrap"), false);
+    $("lList").innerHTML = "";
+  }
+}
+
+$("lGo").onclick = () => {
+  if (LIVE.want) return liveStop();
+  LIVE.want = true; LIVE.tries = 0;
+  liveButton();
+  liveConnect();
 };
+
+// A backgrounded tab on a phone loses its socket without an event anybody can
+// rely on, so coming back is its own reason to check.
+addEventListener("visibilitychange", () => {
+  if (document.hidden || !LIVE.want || LIVE.sock) return;
+  clearTimeout(LIVE.timer); LIVE.tries = 0; liveConnect();
+});
+addEventListener("online", () => {
+  if (!LIVE.want || LIVE.sock) return;
+  clearTimeout(LIVE.timer); LIVE.tries = 0; liveConnect();
+});
 
 $("lRaw").onclick = () => {
   const on = $("lDump").classList.contains("hide");
+  if (on) $("lDump").textContent = JSON.stringify(LIVE.raw, null, 2);
   show($("lDump"), on);
   $("lRaw").textContent = on ? "Skrýt surová data" : "Ukázat surová data";
 };
 
-/* ------------------------------- wiring ------------------------------ */
+/* -------------------------------- key -------------------------------- */
+
+/* The hint tells people to fish the key out of a link, so the field takes the
+ * link as well, and says which half of "clientKey:guid" is missing rather than
+ * letting the handshake fail with a number. */
+function parseKey(raw) {
+  let s = String(raw || "").trim();
+  const m = s.match(/[?&]key=([^&#\s]+)/);
+  if (m) { try { s = decodeURIComponent(m[1]); } catch { s = m[1]; } }
+  s = s.replace(/\s+/g, "");
+  if (!s) return { err: "Vlož klíč, nebo rovnou celý odkaz s ?key=…" };
+  let decoded;
+  try { decoded = atob(s); } catch { return { err: "Tohle není base64. Zkopíruj hodnotu ?key= celou." }; }
+  if (!/^[^:]+:[0-9a-f-]{8,}$/i.test(decoded))
+    return { err: `Klíč se má dekódovat na clientKey:guid, tenhle se dekódoval na „${decoded.slice(0, 40)}“.` };
+  return { key: s };
+}
 
 $("keyToggle").onclick = () => show($("keyPanel"), $("keyPanel").classList.contains("hide"));
-$("keyApply").onclick = () => {
-  state.key = $("keyInput").value.trim();
-  show($("keyPanel"), false);
-  $("bList").innerHTML = "";
-  boot();
-};
-$("tabs").onclick = (e) => { const b = e.target.closest("[data-tab]"); if (b) selectTab(b.dataset.tab); };
-$("bGo").onclick = loadBest;
 
-// Today on the leaderboard, this week on the driver page: both are what you
-// want when you have just got off the track, and both are cheap to ask for.
-$("bFrom").value = shiftDays(0);      $("bTo").value = shiftDays(0);
-$("dFrom").value = mondayThisWeek();  $("dTo").value = shiftDays(0);
-updateHint();
+function useKey(raw) {
+  const r = parseKey(raw);
+  if (r.err) { $("keyErr").textContent = r.err; return show($("keyErr"), true); }
+  show($("keyErr"), false);
+  state.key = r.key;
+  // Otherwise a different track lasts exactly until the page reloads.
+  try {
+    if (r.key === DEFAULT_KEY) localStorage.removeItem(KEY_STORE);
+    else localStorage.setItem(KEY_STORE, r.key);
+  } catch { /* private mode */ }
+  show($("keyPanel"), false);
+  bestRows = []; bestLoaded = null; heatLoaded = null;
+  $("bList").innerHTML = "";
+  liveStop(); LIVE.settings = null; LIVE.last = null; LIVE.shown = null; state.live = null;
+  writeUrl(false);
+  boot();
+}
+
+$("keyApply").onclick = () => useKey($("keyInput").value);
+$("keyReset").onclick = () => { $("keyInput").value = DEFAULT_KEY; useKey(DEFAULT_KEY); };
+$("bootRetry").onclick = () => boot();
+
+$("tabs").onclick = (e) => {
+  const b = e.target.closest("[data-tab]");
+  if (!b) return;
+  view.tab = b.dataset.tab;
+  commit(false);
+};
+
+/* ------------------------------- wiring ------------------------------ */
+
+readUrl();
+writeUrl(false);
+applyView();
 boot();
