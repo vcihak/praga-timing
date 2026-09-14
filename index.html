@@ -9,6 +9,8 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>Praga Timing</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2314161A'/%3E%3Cpath d='M16 6a10 10 0 1 0 10 10' fill='none' stroke='%23ED1C24' stroke-width='3' stroke-linecap='round'/%3E%3Ccircle cx='16' cy='16' r='2.5' fill='%23F0B429'/%3E%3C/svg%3E">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-192.png">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -18,58 +20,102 @@
       <h1 id="trackName">Načítám</h1>
       <div class="sub" id="trackSub">…</div>
     </div>
-    <button class="ghost" id="keyToggle">klíč</button>
+    <div class="row hdr-actions">
+      <button class="ghost" id="groupToggle">★ skupina</button>
+      <button class="ghost" id="keyToggle">klíč</button>
+    </div>
   </header>
 
-  <div class="pad hide" id="keyPanel" style="padding-top:14px;padding-bottom:14px;background:var(--surface)">
-    <label><span>Base64 klíč z odkazu na modul</span>
-      <input id="keyInput" style="font-family:var(--mono);font-size:11px">
-    </label>
-    <p class="hint">Dekóduje se na <code>clientKey:guid</code>. Vezmi ho z parametru
-      <code>?key=</code> jakéhokoli SMS-Timing modulu a máš tím i jinou dráhu.</p>
-    <button class="go quiet" id="keyApply">Použít</button>
+  <div class="pad keypanel hide" id="groupPanel">
+    <div>
+      <div class="panel-title">Moje skupina</div>
+      <p class="hint">Lidi, se kterými jezdíš. Hvězdička u kohokoli v seznamu je přidá sem.
+        Drží se v tomhle prohlížeči — odkazem je pošleš ostatním.</p>
+    </div>
+    <div id="favList"></div>
+    <div class="row">
+      <label><span>Přidat jméno</span>
+        <input id="favAdd" placeholder="přezdívka z registrace" autocomplete="off"></label>
+    </div>
+    <div class="row">
+      <button class="go quiet" id="favShare">Sdílet skupinu</button>
+      <button class="go quiet" id="favClear">Vymazat vše</button>
+    </div>
+    <div class="note hide" id="favNote"></div>
   </div>
 
-  <div class="pad hide" id="bootErr" style="padding-top:16px"></div>
+  <div class="pad keypanel hide" id="keyPanel">
+    <label><span>Base64 klíč, nebo rovnou celý odkaz na modul</span>
+      <input id="keyInput" class="mono"></label>
+    <p class="hint">Dekóduje se na <code>clientKey:guid</code>. Vezmi ho z parametru
+      <code>?key=</code> jakéhokoli SMS-Timing modulu a máš tím i jinou dráhu.
+      Celý odkaz můžeš vložit taky, klíč si z něj vytáhnu sám.</p>
+    <div class="note bad hide" id="keyErr"></div>
+    <div class="row">
+      <button class="go quiet" id="keyApply">Použít</button>
+      <button class="go quiet hide" id="keyReset">Zpět na Pragu</button>
+    </div>
+  </div>
 
-  <nav id="tabs" class="hide">
-    <button data-tab="best" aria-selected="true">Nejlepší časy</button>
-    <button data-tab="driver" aria-selected="false">Jezdec</button>
-    <button data-tab="live" aria-selected="false">Živě</button>
+  <div class="pad hide" id="bootErr">
+    <div class="note bad" id="bootMsg"></div>
+    <button class="go quiet" id="bootRetry">Zkusit znovu</button>
+  </div>
+
+  <nav id="tabs" class="hide" role="tablist">
+    <button data-tab="best" role="tab" aria-selected="true">Nejlepší časy</button>
+    <button data-tab="driver" role="tab" aria-selected="false">Jezdec</button>
+    <button data-tab="live" role="tab" aria-selected="false">Živě</button>
   </nav>
 
   <div class="scroll hide" id="groups"></div>
 
   <!-- best times -->
   <section id="panel-best" class="hide">
-    <div class="scroll" id="presets"></div>
-    <div class="pad">
-      <div class="row" id="bRange">
-        <label><span>Od</span><input type="date" id="bFrom"></label>
-        <label class="narrow tm hide"><span>čas</span>
-          <input id="bFromT" inputmode="numeric" maxlength="5" placeholder="00:00"></label>
-        <label><span>Do včetně</span><input type="date" id="bTo"></label>
-        <label class="narrow tm hide"><span>čas</span>
-          <input id="bToT" inputmode="numeric" maxlength="5" placeholder="23:59"></label>
-        <label class="narrow"><span>Počet</span><input type="number" id="bMax" value="100" min="1"></label>
+    <div class="stickybar hide" id="bSticky">
+      <div class="stickyinner">
+        <button class="sticky-range" id="bStickyWhat"></button>
+        <button class="chip" id="bStickyFav" data-on="0">★</button>
+        <button class="chip" id="bStickyGo">Obnovit</button>
       </div>
-      <div class="row">
-        <button class="chip" id="bClock" data-on="0">⏱ Upřesnit čas</button>
-        <button class="chip" id="bFav" data-on="0">★ Jen oblíbení</button>
-        <button class="chip hide" id="bBack">← Zpět na rozsah</button>
-      </div>
-      <button class="go" id="bGo">Načíst</button>
-      <div class="note bad hide" id="bErr"></div>
-      <p class="hint" id="bWhat"></p>
     </div>
-    <div class="list" id="bList" data-fav-only="0"></div>
+    <div id="bFilters">
+      <div class="scroll" id="presets"></div>
+      <div class="pad">
+        <div class="row" id="bRange">
+          <label><span>Od</span><input type="date" id="bFrom"></label>
+          <label class="narrow tm hide"><span>čas</span>
+            <input id="bFromT" inputmode="numeric" maxlength="5" placeholder="00:00"></label>
+          <label><span>Do včetně</span><input type="date" id="bTo"></label>
+          <label class="narrow tm hide"><span>čas</span>
+            <input id="bToT" inputmode="numeric" maxlength="5" placeholder="23:59"></label>
+          <label class="narrow"><span>Počet</span>
+            <input type="number" id="bMax" value="100" min="1" max="500"></label>
+        </div>
+        <div class="row">
+          <button class="chip" id="bClock" data-on="0">⏱ Upřesnit čas</button>
+          <button class="chip" id="bFav" data-on="0">★ Jen oblíbení</button>
+        </div>
+        <div class="row">
+          <button class="go" id="bGo">Načíst</button>
+          <button class="go quiet share" id="bShare" title="Sdílet tenhle pohled">Sdílet</button>
+        </div>
+        <div class="note bad hide" id="bErr"></div>
+        <p class="hint" id="bWhat"></p>
+      </div>
+    </div>
+    <div class="list" id="bList"></div>
   </section>
 
   <!-- driver -->
   <section id="panel-driver" class="hide">
     <div class="pad" style="padding-top:12px">
       <label><span>Jméno jezdce</span>
-        <input id="dName" placeholder="část přezdívky" autocomplete="off"></label>
+        <input id="dName" placeholder="část přezdívky, víc oddělíš čárkou" autocomplete="off"></label>
+      <div class="row">
+        <button class="chip" id="dGroup">★ Moje skupina</button>
+        <button class="chip hide" id="dClear">Vyčistit</button>
+      </div>
       <div class="row">
         <label><span>Od</span><input type="date" id="dFrom"></label>
         <label><span>Do včetně</span><input type="date" id="dTo"></label>
@@ -79,6 +125,7 @@
       <button class="go" id="dGo">Projet</button>
       <div class="note bad hide" id="dErr"></div>
     </div>
+    <div id="dLegend" class="legend"></div>
     <div id="dTrend"></div>
     <div class="list" id="dList"></div>
   </section>
@@ -88,6 +135,7 @@
     <div class="pad" style="padding:12px 16px 16px">
       <button class="live-toggle" id="lGo">Připojit</button>
       <div class="note hide" id="lNote"></div>
+      <div class="hint hide" id="lWake"></div>
     </div>
     <div class="heat hide" id="lHead">
       <div class="heat-name" id="lName"></div>
@@ -108,6 +156,22 @@
       <button class="ghost hide" id="lRaw" style="align-self:flex-start">Surová data</button>
       <pre class="hide" id="lDump"></pre>
     </div>
+  </section>
+
+  <!-- one heat, opened from any timestamp -->
+  <section id="panel-heat" class="hide">
+    <div class="heatbar">
+      <button class="ghost" id="hBack">← Zpět</button>
+      <div class="heatbar-text">
+        <div class="heat-name" id="hTitle"></div>
+        <div class="heat-sub" id="hSub"></div>
+      </div>
+      <button class="ghost" id="hShare">Sdílet</button>
+    </div>
+    <div class="pad" style="padding-top:12px">
+      <div class="note bad hide" id="hErr"></div>
+    </div>
+    <div class="list" id="hList"></div>
   </section>
 </div>
 
