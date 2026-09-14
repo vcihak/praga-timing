@@ -34,6 +34,17 @@ const norm = (n) => String(n ?? "").replace(/\s+/g, " ").trim();
 
 const state = { rscId: "", resources: null, live: null, key: "" };
 
+/* "Po jízdách / Po dnech" needed a paragraph under it to say what it did. Read
+ * after the label beside them, these say it themselves: one row is a heat, a
+ * day, a week, a month. A heat is the default because it is the question people
+ * actually have — which sessions did I drive — and the coarse-to-fine scan made
+ * it cheap enough to ask by default. */
+const SIZES = [
+  ["heat", "jízda"], ["day", "den"], ["week", "týden"], ["month", "měsíc"],
+];
+const SIZE_DEFAULT = "heat";
+
+
 /* ---------------------------- track time -----------------------------
  *
  * Every time in this app is track wall-clock, never the reader's. A phone in
@@ -279,7 +290,7 @@ function renderFavPanel() {
   el.innerHTML = names.length
     ? names.map((n) => `<div class="favrow"><span class="who">${esc(n)}</span>
         <button class="ghost" data-unfav="${esc(n)}" title="Odebrat ze skupiny">✕</button></div>`).join("")
-    : `<p class="hint">Zatím nikdo. Přidej jméno níž, nebo klepni na hvězdičku u kohokoli v seznamu.</p>`;
+    : `<p class="hint">Zatím nikdo.</p>`;
   show($("dGroup"), names.length > 0);
 }
 
@@ -427,7 +438,7 @@ function wireList(el, repaint) {
 const DEFAULTS = () => ({
   tab: "best", scg: "", heat: "", who: "",
   from: today(), to: today(), clock: 0, ft: "00:00", tt: "23:59", max: 100, fav: 0, preset: 0,
-  q: "", df: mondayThisWeek(), dt: today(), sz: "day",
+  q: "", df: mondayThisWeek(), dt: today(), sz: SIZE_DEFAULT,
 });
 
 const PARAM = {
@@ -446,7 +457,7 @@ function readUrl() {
     view[k] = typeof d[k] === "number" ? (Number.isFinite(+raw) ? +raw : d[k]) : raw;
   }
   if (!["best", "driver", "live"].includes(view.tab)) view.tab = "best";
-  if (!SIZES.some(([v]) => v === view.sz)) view.sz = "day";
+  if (!SIZES.some(([v]) => v === view.sz)) view.sz = SIZE_DEFAULT;
   view.max = Math.min(500, Math.max(1, view.max || 100));
 }
 
@@ -504,7 +515,7 @@ function applyView() {
 
   setVal("dName", view.q); setVal("dFrom", view.df); setVal("dTo", view.dt);
   [...$("dSize").children].forEach((c) => (c.dataset.on = c.dataset.s === view.sz ? "1" : "0"));
-  updateHint();
+  updateDriverControls();
 
   if (!state.rscId) return;
 
@@ -554,9 +565,7 @@ async function boot() {
     state.rscId = "";
     $("trackName").textContent = "Nepřipojeno";
     $("trackSub").textContent = "";
-    $("bootMsg").textContent = e.message +
-      " Klíč Praga zveřejňuje v odkazu na registraci na pragaarena.cz — vezmi z něj parametr ?key= a vlož ho nahoře pod „klíč“." +
-      " Pokud jde o síťovou chybu, otevři stránku přes https, ne ze souboru.";
+    $("bootMsg").textContent = e.message + " Zkus vložit odkaz na modul pod „klíč“.";
     show($("bootErr"), true);
     // The advice is "paste a key", so open the place where you paste it.
     show($("keyPanel"), true);
@@ -648,7 +657,7 @@ function describeRange() {
   const r = apiRange();
   const cz = (d, t) => (/^\d{4}-\d{2}-\d{2}$/.test(d) ? d.split("-").reverse().map(Number).join(".") : "?")
     + (view.clock ? " " + t : "");
-  const text = `${cz(view.from, r.firstMinute)} — ${cz(view.to, r.lastMinute)} včetně`
+  const text = `${cz(view.from, r.firstMinute)} — ${cz(view.to, r.lastMinute)}`
     + (autoRefreshes() ? " · obnovuje se" : "");
   $("bWhat").textContent = text;
   $("bStickyWhat").textContent = text;
@@ -803,17 +812,14 @@ $("hBack").onclick = () => {
 
 /* ---------------------------- driver hunt ---------------------------- */
 
-const SIZES = [
-  ["heat", "Po jízdách"], ["day", "Po dnech"], ["week", "Po týdnech"], ["month", "Po měsících"],
-];
 $("dSize").innerHTML = SIZES.map(([v, l]) =>
-  `<button class="chip" data-s="${v}" data-on="${v === "day" ? 1 : 0}">${esc(l)}</button>`).join("");
+  `<button class="chip" data-s="${v}" data-on="${v === SIZE_DEFAULT ? 1 : 0}">${esc(l)}</button>`).join("");
 $("dSize").onclick = (e) => {
   const b = e.target.closest("[data-s]"); if (!b) return;
   view.sz = b.dataset.s;
   commit(false);
 };
-$("dName").addEventListener("input", updateHint);
+$("dName").addEventListener("input", updateDriverControls);
 for (const id of ["dFrom", "dTo", "dName"]) {
   $(id).addEventListener("change", () => {
     view.q = $("dName").value; view.df = $("dFrom").value; view.dt = $("dTo").value;
@@ -879,16 +885,9 @@ function idleScanButton() {
   $("dGo").textContent = "Projet";
 }
 
-function updateHint() {
-  const days = dayWindows($("dFrom").value, $("dTo").value).length;
-  const many = needlesFrom($("dName").value).length > 1
-    ? " Víc jmen nestojí víc dotazů — okno se stahuje celé a jména se hledají až tady."
-    : "";
-  $("dHint").textContent = (view.sz === "heat"
-    ? `Po jízdách projede nejdřív ${days} dní, pak jen v zasažených dnech tříhodinové bloky`
-      + ` a nakonec devítiminutová okna kolem nich — jemně se ptá jen tam, kde se jméno objevilo.`
-    : `API vrací jeden nejlepší čas na jezdce za dotázané okno, takže jemnější dělení znamená hustší historii a víc dotazů.`
-      + ` Teď ${buckets($("dFrom").value, $("dTo").value, view.sz).length}, po ${PARALLEL} současně.`) + many;
+// What the scan is doing is the scan's business; the button says how far it has
+// got while it runs, and that is the whole of what anybody wanted to know.
+function updateDriverControls() {
   show($("dClear"), !!$("dName").value.trim());
 }
 
@@ -1403,28 +1402,17 @@ function onLiveMessage(raw) {
 let wakeLock = null;
 
 async function holdScreen() {
-  if (!("wakeLock" in navigator) || wakeLock || document.hidden || !LIVE.want) return wakeText();
+  if (!("wakeLock" in navigator) || wakeLock || document.hidden || !LIVE.want) return;
   try {
     wakeLock = await navigator.wakeLock.request("screen");
-    wakeLock.addEventListener("release", () => { wakeLock = null; wakeText(); });
+    wakeLock.addEventListener("release", () => { wakeLock = null; });
   } catch { wakeLock = null; }   // refused: low battery, policy, or no support
-  wakeText();
 }
 
 function dropScreen() {
   const w = wakeLock;
   wakeLock = null;
   if (w) w.release().catch(() => { /* already gone */ });
-  wakeText();
-}
-
-function wakeText() {
-  const on = LIVE.want && !!wakeLock;
-  const unsupported = LIVE.want && !("wakeLock" in navigator);
-  $("lWake").textContent = on ? "Displej zůstane rozsvícený, dokud jsi připojený."
-    : unsupported ? "Tenhle prohlížeč neumí držet displej rozsvícený — zhasne ti sám."
-    : "";
-  show($("lWake"), !!$("lWake").textContent);
 }
 
 $("lGo").onclick = () => {

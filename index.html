@@ -29,8 +29,7 @@
   <div class="pad keypanel hide" id="groupPanel">
     <div>
       <div class="panel-title">Moje skupina</div>
-      <p class="hint">Lidi, se kterými jezdíš. Hvězdička u kohokoli v seznamu je přidá sem.
-        Drží se v tomhle prohlížeči — odkazem je pošleš ostatním.</p>
+      <p class="hint">Hvězdička u kohokoli v seznamu ho přidá sem.</p>
     </div>
     <div id="favList"></div>
     <div class="row">
@@ -47,9 +46,7 @@
   <div class="pad keypanel hide" id="keyPanel">
     <label><span>Base64 klíč, nebo rovnou celý odkaz na modul</span>
       <input id="keyInput" class="mono"></label>
-    <p class="hint">Dekóduje se na <code>clientKey:guid</code>. Vezmi ho z parametru
-      <code>?key=</code> jakéhokoli SMS-Timing modulu a máš tím i jinou dráhu.
-      Celý odkaz můžeš vložit taky, klíč si z něj vytáhnu sám.</p>
+    <p class="hint">Odkaz na jakýkoli SMS-Timing modul — klíč si z něj vytáhnu sám.</p>
     <div class="note bad hide" id="keyErr"></div>
     <div class="row">
       <button class="go quiet" id="keyApply">Použít</button>
@@ -111,7 +108,7 @@
   <section id="panel-driver" class="hide">
     <div class="pad" style="padding-top:12px">
       <label><span>Jméno jezdce</span>
-        <input id="dName" placeholder="část přezdívky, víc oddělíš čárkou" autocomplete="off"></label>
+        <input id="dName" placeholder="jméno, víc oddělíš čárkou" autocomplete="off"></label>
       <div class="row">
         <button class="chip" id="dGroup">★ Moje skupina</button>
         <button class="chip hide" id="dClear">Vyčistit</button>
@@ -120,8 +117,10 @@
         <label><span>Od</span><input type="date" id="dFrom"></label>
         <label><span>Do včetně</span><input type="date" id="dTo"></label>
       </div>
-      <div class="row" id="dSize"></div>
-      <p class="hint" id="dHint"></p>
+      <div class="sizes">
+        <span class="sizes-label">Jeden řádek</span>
+        <div class="row" id="dSize"></div>
+      </div>
       <button class="go" id="dGo">Projet</button>
       <div class="note bad hide" id="dErr"></div>
     </div>
@@ -135,7 +134,6 @@
     <div class="pad" style="padding:12px 16px 16px">
       <button class="live-toggle" id="lGo">Připojit</button>
       <div class="note hide" id="lNote"></div>
-      <div class="hint hide" id="lWake"></div>
     </div>
     <div class="heat hide" id="lHead">
       <div class="heat-name" id="lName"></div>
