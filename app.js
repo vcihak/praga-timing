@@ -236,24 +236,144 @@ function buckets(from, to, size) {
  * driving with the same people. */
 const favKey = (name) => norm(name).toLowerCase();
 
+/* Stored as the names you actually typed, matched on a squashed lowercase key.
+ * Keeping only the key meant the group panel listed "petra" — a list of your
+ * friends should spell them the way they spell themselves. Older browsers hold
+ * the key-only array, which reads back as a list of names and needs no
+ * migration beyond looking a little shouty until re-added. */
 function favs() {
-  try { return new Set(JSON.parse(localStorage.getItem(FAVS) || "[]")); }
-  catch { return new Set(); }
+  let raw = [];
+  try { raw = JSON.parse(localStorage.getItem(FAVS) || "[]"); } catch { /* corrupt */ }
+  const m = new Map();
+  if (Array.isArray(raw)) for (const n of raw) {
+    const name = norm(n);
+    if (name) m.set(favKey(name), name);
+  }
+  return m;
 }
 
 function toggleFav(name) {
   const set = favs(), k = favKey(name);
   if (!k) return;
-  set.has(k) ? set.delete(k) : set.add(k);
-  try { localStorage.setItem(FAVS, JSON.stringify([...set])); } catch { /* private mode */ }
+  set.has(k) ? set.delete(k) : set.set(k, norm(name));
+  setFavs(set);
 }
 
 const isFav = (set, name) => set.has(favKey(name));
 
+function setFavs(set) {
+  try { localStorage.setItem(FAVS, JSON.stringify([...set.values()])); } catch { /* private mode */ }
+  renderFavPanel();
+}
+
+/* The group, as a thing you can look at and edit.
+ *
+ * Starring people built a list that only existed as scattered gold stars in
+ * whichever list you happened to be looking at: no way to see who was on it, no
+ * way to take somebody off without hunting them down, and no way to give it to
+ * the friend standing next to you. */
+function renderFavPanel() {
+  const names = [...favs().values()].sort((a, b) => a.localeCompare(b, "cs"));
+  const el = $("favList");
+  if (!el) return;
+  el.innerHTML = names.length
+    ? names.map((n) => `<div class="favrow"><span class="who">${esc(n)}</span>
+        <button class="ghost" data-unfav="${esc(n)}" title="Odebrat ze skupiny">✕</button></div>`).join("")
+    : `<p class="hint">Zatím nikdo. Přidej jméno níž, nebo klepni na hvězdičku u kohokoli v seznamu.</p>`;
+  show($("dGroup"), names.length > 0);
+}
+
+$("favList").onclick = (e) => {
+  const b = e.target.closest("[data-unfav]");
+  if (!b) return;
+  const set = favs();
+  set.delete(favKey(b.dataset.unfav));
+  setFavs(set);
+  repaintLists();
+};
+
+function addFav(raw) {
+  const name = norm(raw);
+  if (!name) return;
+  const set = favs();
+  set.set(favKey(name), name);
+  setFavs(set);
+  repaintLists();
+}
+
+$("favAdd").addEventListener("change", () => { addFav($("favAdd").value); $("favAdd").value = ""; });
+
+$("favClear").onclick = () => {
+  if (!favs().size) return;
+  // Two taps, because this is the one control that throws away a season of
+  // names and there is no server holding a copy.
+  if ($("favClear").dataset.armed === "1") {
+    setFavs(new Set());
+    $("favClear").dataset.armed = "0";
+    $("favClear").textContent = "Vymazat vše";
+    repaintLists();
+    return;
+  }
+  $("favClear").dataset.armed = "1";
+  $("favClear").textContent = "Opravdu vymazat?";
+  setTimeout(() => {
+    $("favClear").dataset.armed = "0";
+    $("favClear").textContent = "Vymazat vše";
+  }, 4000);
+};
+
+$("favShare").onclick = () => {
+  const names = [...favs().values()];
+  if (!names.length) return favNote("Skupina je prázdná.");
+  const u = new URL(location.href);
+  u.search = new URLSearchParams({ favs: names.join(",") }).toString();
+  shareThis("Moje skupina na Praga Timing", u.toString());
+};
+
+function favNote(text) {
+  $("favNote").textContent = text || "";
+  show($("favNote"), !!text);
+}
+
+// A shared group arrives as a parameter and is merged, never substituted: the
+// friend who sent it should not wipe the list of the friend who opened it.
+function importFavs() {
+  const p = new URLSearchParams(location.search);
+  const raw = p.get("favs");
+  if (!raw) return;
+  const set = favs();
+  let added = 0;
+  for (const n of raw.split(",")) {
+    const name = norm(n), k = favKey(name);
+    if (k && !set.has(k)) { set.set(k, name); added++; }
+  }
+  setFavs(set);
+  p.delete("favs");
+  try { history.replaceState({ app: 1 }, "", p.toString() ? "?" + p : location.pathname); } catch { /* opaque origin */ }
+  if (added) {
+    show($("groupPanel"), true);
+    favNote(`Přidáno ${added} ${added === 1 ? "jméno" : added < 5 ? "jména" : "jmen"} do skupiny.`);
+  }
+}
+
+$("groupToggle").onclick = () => {
+  const on = $("groupPanel").classList.contains("hide");
+  show($("groupPanel"), on);
+  if (on) { show($("keyPanel"), false); favNote(""); }
+};
+
+// Every list that draws a star has to hear about a change made somewhere else.
+function repaintLists() {
+  paintBest();
+  if (dFound.length) paintDriver();
+  if (heatRows.length) paintHeat();
+  if (LIVE.shown) renderLive(LIVE.shown.data, LIVE.shown.ended);
+}
+
 /* ----------------------------- record list ---------------------------- */
 
 function renderList(el, rows, opts = {}) {
-  const { renumber = false, focus = "", plainWhen = false, favOnly = false } = opts;
+  const { renumber = false, focus = "", plainWhen = false, favOnly = false, colorOf = null } = opts;
   const set = favs();
   if (favOnly) rows = rows.filter((r) => isFav(set, r.participant));
   if (!rows.length) {
@@ -278,6 +398,7 @@ function renderList(el, rows, opts = {}) {
       <span class="pos">${rank}</span>
       <button class="star" data-fav="${esc(name)}" data-on="${on ? 1 : 0}"
         aria-pressed="${on}" title="Oblíbený">${on ? "★" : "☆"}</button>
+      ${colorOf ? `<span class="swatch" style="background:${esc(colorOf(name)) || "transparent"}"></span>` : ""}
       <span class="who">${esc(name)}</span>
       ${when}
       <span class="score">${esc(r.score)}</span></div>`;
@@ -386,6 +507,14 @@ function applyView() {
   updateHint();
 
   if (!state.rscId) return;
+
+  // Opening the live tab means you want the feed; the only reason not to start
+  // it is that you pressed Odpojit yourself.
+  if (!onHeat && view.tab === "live" && !LIVE.want && !LIVE.optedOut) {
+    LIVE.want = true; LIVE.tries = 0;
+    liveButton();
+    liveConnect();
+  }
 
   if (onHeat) { loadHeat(); return; }
   if (view.tab === "best") {
@@ -684,6 +813,7 @@ $("dSize").onclick = (e) => {
   view.sz = b.dataset.s;
   commit(false);
 };
+$("dName").addEventListener("input", updateHint);
 for (const id of ["dFrom", "dTo", "dName"]) {
   $(id).addEventListener("change", () => {
     view.q = $("dName").value; view.df = $("dFrom").value; view.dt = $("dTo").value;
@@ -751,22 +881,51 @@ function idleScanButton() {
 
 function updateHint() {
   const days = dayWindows($("dFrom").value, $("dTo").value).length;
-  $("dHint").textContent = view.sz === "heat"
+  const many = needlesFrom($("dName").value).length > 1
+    ? " Víc jmen nestojí víc dotazů — okno se stahuje celé a jména se hledají až tady."
+    : "";
+  $("dHint").textContent = (view.sz === "heat"
     ? `Po jízdách projede nejdřív ${days} dní, pak jen v zasažených dnech tříhodinové bloky`
       + ` a nakonec devítiminutová okna kolem nich — jemně se ptá jen tam, kde se jméno objevilo.`
     : `API vrací jeden nejlepší čas na jezdce za dotázané okno, takže jemnější dělení znamená hustší historii a víc dotazů.`
-      + ` Teď ${buckets($("dFrom").value, $("dTo").value, view.sz).length}, po ${PARALLEL} současně.`;
+      + ` Teď ${buckets($("dFrom").value, $("dTo").value, view.sz).length}, po ${PARALLEL} současně.`) + many;
+  show($("dClear"), !!$("dName").value.trim());
 }
+
+/* Several names cost the same as one.
+ *
+ * A window is fetched whole and filtered here, so asking "was anybody from my
+ * group out?" is the same request as asking about one person — the needles just
+ * grow. What does grow is the hot region the coarse passes turn up, since a
+ * block is hot if anyone in the group was in it; that is the honest cost of the
+ * question and it is still far under a flat grid. */
+const needlesFrom = (text) => [...new Set(
+  String(text || "").split(",").map((n) => norm(n).toLowerCase()).filter(Boolean))];
+
+const matches = (name, needles) => {
+  const n = norm(name).toLowerCase();
+  return needles.some((x) => n.includes(x));
+};
+
+$("dGroup").onclick = () => {
+  const names = [...favs().values()].sort((a, b) => a.localeCompare(b, "cs"));
+  if (!names.length) return;
+  $("dName").value = names.join(", ");
+  view.q = $("dName").value;
+  commit(false);
+};
+
+$("dClear").onclick = () => { $("dName").value = ""; view.q = ""; commit(false); };
 
 $("dGo").onclick = async () => {
   // Second click while running means stop. Bumping the id makes the live
   // loop bail on its next check, so no two scans can ever share the list.
   if ($("dGo").dataset.running === "1") { scanRun++; idleScanButton(); return; }
 
-  const needle = norm($("dName").value).toLowerCase();
+  const needles = needlesFrom($("dName").value);
   show($("dErr"), false);
   const fail = (m) => { $("dErr").textContent = m; show($("dErr"), true); };
-  if (!needle) return fail("Napiš aspoň část jména.");
+  if (!needles.length) return fail("Napiš aspoň část jména.");
   const a = wallDay($("dFrom").value), b = wallDay($("dTo").value);
   if (!a || !b) return fail("Doplň oba dny.");
   if (a > b) return fail("„Do“ je dřív než „Od“. Prohoď je.");
@@ -783,8 +942,8 @@ $("dGo").onclick = async () => {
   const seeds = [];
   let failed = 0, stage = "";
 
-  const paint = () => renderList($("dList"),
-    [...found].sort((x, y) => (x.secs ?? 1e9) - (y.secs ?? 1e9)), { renumber: true });
+  scanNeedles = needles;
+  const paint = () => paintDriver();
 
   const hit = (r) => {
     const k = norm(r.participant) + "|" + r.date + "|" + r.score;
@@ -809,7 +968,7 @@ $("dGo").onclick = async () => {
       if (!alive()) return;
       let added = 0, any = false;
       for (const r of recs) {
-        if (!norm(r.participant).toLowerCase().includes(needle)) continue;
+        if (!matches(r.participant, needles)) continue;
         any = true;
         if (hit(r)) added++;
       }
@@ -849,8 +1008,7 @@ $("dGo").onclick = async () => {
 
     if (!alive()) return;
 
-    trend($("dTrend"), found.filter((f) => f.secs != null)
-      .sort((x, y) => wall(x.date) - wall(y.date)));
+    trend($("dTrend"), found.filter((f) => f.secs != null));
     if (!found.length)
       $("dList").innerHTML = '<div class="empty">Nic. Jména jsou přezdívky z registrace, zkus kratší kus.</div>';
     else paint();
@@ -862,54 +1020,131 @@ $("dGo").onclick = async () => {
   }
 };
 
-wireList($("dList"), () => renderList($("dList"),
-  [...dFound].sort((x, y) => (x.secs ?? 1e9) - (y.secs ?? 1e9)), { renumber: true }));
+/* Who gets which colour, fixed by the order you asked about them rather than by
+ * who happens to be quickest today — a colour that moves when the standings do
+ * is a colour that tells you nothing. */
+let scanNeedles = [];
+
+function seriesOrder(rows) {
+  const names = [...new Set(rows.map((r) => norm(r.participant)))];
+  const rank = (n) => {
+    const i = scanNeedles.findIndex((x) => n.toLowerCase().includes(x));
+    return i < 0 ? scanNeedles.length : i;
+  };
+  return names.sort((a, b) => rank(a) - rank(b) || a.localeCompare(b, "cs"));
+}
+
+const colorOf = (order) => (name) => {
+  const i = order.indexOf(norm(name));
+  return i >= 0 && i < SERIES.length ? SERIES[i] : "";
+};
+
+function paintDriver() {
+  const rows = [...dFound].sort((x, y) => (x.secs ?? 1e9) - (y.secs ?? 1e9));
+  const order = seriesOrder(rows);
+  renderList($("dList"), rows, {
+    renumber: true,
+    colorOf: order.length > 1 ? colorOf(order) : null,
+  });
+}
+
+wireList($("dList"), paintDriver);
 
 /* ------------------------------- trend -------------------------------
  *
  * Points are evenly spaced by session rather than by date: the question is
  * "am I getting quicker", and a three-month gap drawn to scale would squash
- * everything worth reading into the right-hand edge. The axes say what the
- * numbers are — a line with no scale on it is decoration. */
+ * everything worth reading into the right-hand edge. With a group on the chart
+ * the x position is the session's place in the merged list of everybody's
+ * sessions, which keeps the even spacing and still lines the drivers up against
+ * each other. The axes say what the numbers are — a line with no scale on it is
+ * decoration. */
 const CH = { w: 340, h: 150, l: 40, r: 10, t: 12, b: 22 };
 
+/* Validated against this page's surface for the dark lightness band, the chroma
+ * floor, protan/deutan separation and contrast — not chosen by eye. Fixed
+ * order, never cycled: a seventh driver does not get an invented hue, it stays
+ * in the list below the chart. */
+const SERIES = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300"];
+const MAX_SERIES = SERIES.length;
+
 function trend(el, pts) {
+  $("dLegend").innerHTML = "";
   if (pts.length < 2) { el.innerHTML = ""; return; }
-  const secs = pts.map((p) => p.secs);
+
+  const order = seriesOrder(pts);
+  const shown = order.slice(0, MAX_SERIES);
+  const multi = order.length > 1;
+  const rows = pts.filter((p) => !multi || shown.includes(norm(p.participant)));
+  if (rows.length < 2) { el.innerHTML = ""; return; }
+
+  // One x per session across everybody, so two drivers in the same heat sit in
+  // the same column instead of drifting apart by session count.
+  const times = [...new Set(rows.map((p) => +wall(p.date)))].sort((a, b) => a - b);
+  const secs = rows.map((p) => p.secs);
   const lo = Math.min(...secs), hi = Math.max(...secs);
   // A flat set of times would otherwise divide by zero and draw on the axis.
   const span = hi - lo || Math.max(0.5, lo * 0.01);
   const top = hi + span * 0.12, bottom = lo - span * 0.12;
-  const x = (i) => CH.l + (i / (pts.length - 1)) * (CH.w - CH.l - CH.r);
-  const y = (s) => CH.t + ((top - s) / (top - bottom)) * (CH.h - CH.t - CH.b);
+  const span_x = Math.max(1, times.length - 1);
+  const x = (t) => CH.l + (times.indexOf(+wall(t)) / span_x) * (CH.w - CH.l - CH.r);
+  const y = (v) => CH.t + ((top - v) / (top - bottom)) * (CH.h - CH.t - CH.b);
 
   const ticks = [lo, (lo + hi) / 2, hi];
-  const grid = ticks.map((s) => `
-    <line x1="${CH.l}" y1="${y(s).toFixed(1)}" x2="${CH.w - CH.r}" y2="${y(s).toFixed(1)}"
+  const grid = ticks.map((v) => `
+    <line x1="${CH.l}" y1="${y(v).toFixed(1)}" x2="${CH.w - CH.r}" y2="${y(v).toFixed(1)}"
       stroke="var(--line)" stroke-width="1"/>
-    <text x="${CH.l - 6}" y="${(y(s) + 3).toFixed(1)}" text-anchor="end">${s.toFixed(3)}</text>`).join("");
+    <text x="${CH.l - 6}" y="${(y(v) + 3).toFixed(1)}" text-anchor="end">${v.toFixed(3)}</text>`).join("");
 
   // Three date labels at most: the ends always, the middle when it fits.
-  const at = pts.length > 3 ? [0, Math.floor((pts.length - 1) / 2), pts.length - 1] : [0, pts.length - 1];
+  const at = times.length > 3 ? [0, Math.floor(span_x / 2), times.length - 1] : [0, times.length - 1];
   const dates = [...new Set(at)].map((i) => {
-    const d = wall(pts[i].date);
-    const anchor = i === 0 ? "start" : i === pts.length - 1 ? "end" : "middle";
-    return `<text x="${x(i).toFixed(1)}" y="${CH.h - 6}" text-anchor="${anchor}">${d ? d.getUTCDate() + "." + (d.getUTCMonth() + 1) + "." : ""}</text>`;
+    const d = new Date(times[i]);
+    const anchor = i === 0 ? "start" : i === times.length - 1 ? "end" : "middle";
+    const px = CH.l + (i / span_x) * (CH.w - CH.l - CH.r);
+    return `<text x="${px.toFixed(1)}" y="${CH.h - 6}" text-anchor="${anchor}">${d.getUTCDate()}.${d.getUTCMonth() + 1}.</text>`;
   }).join("");
 
-  const path = pts.map((p, i) => (i ? "L" : "M") + x(i).toFixed(1) + "," + y(p.secs).toFixed(1)).join(" ");
+  const paint = colorOf(order);
+  const best = Math.min(...rows.map((p) => p.secs));
+  const series = (multi ? shown : [order[0]]).map((name, i) => {
+    const mine = rows.filter((p) => norm(p.participant) === name)
+      .sort((a, b) => wall(a.date) - wall(b.date));
+    if (!mine.length) return "";
+    const stroke = multi ? paint(name) : "var(--accent)";
+    const path = mine.map((p, j) => (j ? "L" : "M") + x(p.date).toFixed(1) + "," + y(p.secs).toFixed(1)).join(" ");
+    const last = mine[mine.length - 1];
+    // Direct labels while there is room for them, so identity is never colour
+    // alone; past four the legend carries it.
+    const label = multi && shown.length <= 4
+      ? `<text class="tip" x="${(x(last.date) - 4).toFixed(1)}" y="${(y(last.secs) - 7).toFixed(1)}"
+           text-anchor="end">${esc(name)}</text>` : "";
+    return `<path d="${path}" fill="none" stroke="${stroke}" stroke-width="2"
+        stroke-linejoin="round" stroke-linecap="round"/>
+      ${mine.map((p) => `<circle cx="${x(p.date).toFixed(1)}" cy="${y(p.secs).toFixed(1)}" r="3"
+         fill="${!multi && p.secs === best ? "var(--gold)" : stroke}"
+         stroke="var(--bg)" stroke-width="2"/>`).join("")}
+      ${label}`;
+  }).join("");
+
+  const taps = rows.map((p) => `<circle class="tap" cx="${x(p.date).toFixed(1)}" cy="${y(p.secs).toFixed(1)}"
+     r="11" fill="transparent" data-at="${esc(p.date)}" data-who="${esc(norm(p.participant))}"
+     ><title>${esc(norm(p.participant))} · ${esc(czDate(p.date))} · ${esc(p.score)}</title></circle>`).join("");
 
   el.innerHTML = `<svg viewBox="0 0 ${CH.w} ${CH.h}" preserveAspectRatio="xMidYMid meet" role="img"
-      aria-label="Vývoj časů, nejlepší ${lo.toFixed(3)} s">
+      aria-label="Vývoj časů, nejlepší ${best.toFixed(3)} s">
     <g class="axis">${grid}${dates}</g>
     <line x1="${CH.l}" y1="${CH.t}" x2="${CH.l}" y2="${CH.h - CH.b}" stroke="var(--line)"/>
-    <path d="${path}" fill="none" stroke="var(--accent)" stroke-width="1.5"/>
-    ${pts.map((p, i) => `<circle cx="${x(i).toFixed(1)}" cy="${y(p.secs).toFixed(1)}" r="2.5"
-       fill="${p.secs === lo ? "var(--gold)" : "var(--accent)"}"/>`).join("")}
-    ${pts.map((p, i) => `<circle class="tap" cx="${x(i).toFixed(1)}" cy="${y(p.secs).toFixed(1)}" r="10"
-       fill="transparent" data-at="${esc(p.date)}" data-who="${esc(norm(p.participant))}"
-       ><title>${esc(czDate(p.date))} · ${esc(p.score)}</title></circle>`).join("")}
+    ${series}${taps}
   </svg>`;
+
+  // A legend whenever there is more than one line; a single line is named by
+  // the field you typed it into.
+  $("dLegend").innerHTML = multi
+    ? shown.map((n) => `<span class="legend-item"><span class="swatch" style="background:${paint(n)}"></span>${esc(n)}</span>`).join("")
+      + (order.length > shown.length
+        ? `<span class="legend-item more">+${order.length - shown.length} dalších v seznamu níž</span>` : "")
+    : "";
 }
 
 // The points are the same doorway into a heat as a timestamp in a list.
@@ -971,6 +1206,7 @@ function renderLive(d, ended) {
   // The quickest lap anybody has done in this heat, which is what makes a time
   // purple rather than merely green.
   const fastest = Math.min(...drivers.map((r) => r.B || Infinity));
+  if (!ended) alertOnPurple(drivers, fastest, set, d.N);
 
   $("lList").innerHTML = drivers.map((r) => {
     /* Timing-screen colours, as everybody expects them — and applied to the
@@ -991,7 +1227,7 @@ function renderLive(d, ended) {
     const badge = r.K && !name.endsWith(" " + r.K)
       ? `<span class="kart">${esc(r.K)}</span>` : "";
     const on = isFav(set, name);
-    return `<tr data-mark="${mark}" data-fav="${on ? 1 : 0}">
+    return `<tr data-mark="${mark}" data-fav="${on ? 1 : 0}" data-alert="${alerting(name) ? 1 : 0}">
       <td class="c-pos"><span class="poscell">
         <button class="star" data-fav="${esc(name)}" data-on="${on ? 1 : 0}"
           aria-pressed="${on}" title="Oblíbený">${on ? "★" : "☆"}</button>${esc(r.P ?? "")}
@@ -1004,6 +1240,34 @@ function renderLive(d, ended) {
       <td class="c-laps">${esc(r.L ?? 0)}</td>
     </tr>`;
   }).join("");
+}
+
+/* Somebody in your group has just gone quickest in the heat. You are holding
+ * the phone at the fence, not reading it, so the row lights up and — where the
+ * browser has it — the phone buzzes. Once per lap, never for a lap already
+ * announced. */
+const ALERT = { at: new Map(), heat: "" };
+const ALERT_MS = 6000;
+
+const alerting = (name) => Date.now() - (ALERT.at.get(favKey(name)) || 0) < ALERT_MS;
+
+function alertOnPurple(drivers, fastest, set, heatName) {
+  // A new heat is a clean slate: the same lap time again is news again.
+  if (heatName && heatName !== ALERT.heat) { ALERT.heat = heatName; ALERT.at.clear(); ALERT.seen = new Map(); }
+  ALERT.seen ||= new Map();
+  for (const r of drivers) {
+    const name = norm(r.N);
+    if (!r.T || r.L < 2 || r.T !== fastest || !isFav(set, name)) continue;
+    const k = favKey(name);
+    if (ALERT.seen.get(k) === r.T) continue;
+    ALERT.seen.set(k, r.T);
+    ALERT.at.set(k, Date.now());
+    // Absent on iOS and refused by browsers without a prior interaction — the
+    // row lighting up is the signal that always lands, the buzz is a bonus.
+    try { navigator.vibrate?.([40, 60, 40]); } catch { /* not supported */ }
+    // Repaint once the highlight has expired, so it clears on a quiet feed too.
+    setTimeout(() => LIVE.shown && renderLive(LIVE.shown.data, LIVE.shown.ended), ALERT_MS + 100);
+  }
 }
 
 $("lList").addEventListener("click", (e) => {
@@ -1043,6 +1307,7 @@ function liveStop() {
   clearInterval(LIVE.watch); LIVE.watch = null;
   const s = LIVE.sock; LIVE.sock = null;
   if (s) { s.onclose = null; try { s.close(); } catch { /* already gone */ } }
+  dropScreen();
   liveNote("");
   liveButton();
 }
@@ -1069,6 +1334,7 @@ async function liveConnect() {
       LIVE.tries = 0; LIVE.seenAt = Date.now();
       liveNote(""); liveButton();
       ws.send("START " + s.liveServerKey);
+      holdScreen();
       clearInterval(LIVE.watch);
       // A socket the network dropped without telling us looks exactly like a
       // socket with nothing to say, until you notice it has said nothing for
@@ -1130,8 +1396,40 @@ function onLiveMessage(raw) {
   }
 }
 
+/* The screen going dark halfway through a heat is the single most annoying
+ * thing about watching timing on a phone. The lock is only grantable while the
+ * page is visible and it is dropped the moment it is not, so it is taken when
+ * the feed comes up and taken again every time you come back to the tab. */
+let wakeLock = null;
+
+async function holdScreen() {
+  if (!("wakeLock" in navigator) || wakeLock || document.hidden || !LIVE.want) return wakeText();
+  try {
+    wakeLock = await navigator.wakeLock.request("screen");
+    wakeLock.addEventListener("release", () => { wakeLock = null; wakeText(); });
+  } catch { wakeLock = null; }   // refused: low battery, policy, or no support
+  wakeText();
+}
+
+function dropScreen() {
+  const w = wakeLock;
+  wakeLock = null;
+  if (w) w.release().catch(() => { /* already gone */ });
+  wakeText();
+}
+
+function wakeText() {
+  const on = LIVE.want && !!wakeLock;
+  const unsupported = LIVE.want && !("wakeLock" in navigator);
+  $("lWake").textContent = on ? "Displej zůstane rozsvícený, dokud jsi připojený."
+    : unsupported ? "Tenhle prohlížeč neumí držet displej rozsvícený — zhasne ti sám."
+    : "";
+  show($("lWake"), !!$("lWake").textContent);
+}
+
 $("lGo").onclick = () => {
-  if (LIVE.want) return liveStop();
+  if (LIVE.want) { LIVE.optedOut = true; return liveStop(); }
+  LIVE.optedOut = false;
   LIVE.want = true; LIVE.tries = 0;
   liveButton();
   liveConnect();
@@ -1140,7 +1438,9 @@ $("lGo").onclick = () => {
 // A backgrounded tab on a phone loses its socket without an event anybody can
 // rely on, so coming back is its own reason to check.
 addEventListener("visibilitychange", () => {
-  if (document.hidden || !LIVE.want || LIVE.sock) return;
+  if (document.hidden || !LIVE.want) return;
+  holdScreen();                       // the lock does not survive being hidden
+  if (LIVE.sock) return;
   clearTimeout(LIVE.timer); LIVE.tries = 0; liveConnect();
 });
 addEventListener("online", () => {
@@ -1173,7 +1473,11 @@ function parseKey(raw) {
   return { key: s };
 }
 
-$("keyToggle").onclick = () => show($("keyPanel"), $("keyPanel").classList.contains("hide"));
+$("keyToggle").onclick = () => {
+  const on = $("keyPanel").classList.contains("hide");
+  show($("keyPanel"), on);
+  if (on) show($("groupPanel"), false);
+};
 
 function useKey(raw) {
   const r = parseKey(raw);
@@ -1204,8 +1508,69 @@ $("tabs").onclick = (e) => {
   commit(false);
 };
 
+/* ------------------------------- sharing ----------------------------- */
+
+/* Every view is already a URL, so sharing one is mostly a matter of handing it
+ * over. navigator.share is the good path on a phone; the clipboard is the
+ * fallback; showing the thing is the last resort, because a share button that
+ * silently does nothing is worse than no button. */
+let toastTimer = null;
+
+function toast(text) {
+  let el = $("toast");
+  if (!el) {
+    // Purely transient, owned by nothing, gone in three seconds — it would only
+    // ever be empty markup in the document.
+    el = document.createElement("div");
+    el.id = "toast";
+    el.className = "toast";
+    document.body.appendChild(el);
+  }
+  el.textContent = text;
+  el.dataset.on = "1";
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.dataset.on = "0"; }, 3000);
+}
+
+async function shareThis(title, url) {
+  if (navigator.share) {
+    try { await navigator.share({ title, url }); return; }
+    catch (e) { if (e && e.name === "AbortError") return; }   // they changed their mind
+  }
+  try { await navigator.clipboard.writeText(url); return toast("Odkaz zkopírován."); }
+  catch { /* no clipboard permission, or no clipboard */ }
+  toast(url);
+}
+
+$("bShare").onclick = () => shareThis("Praga Timing", location.href);
+$("hShare").onclick = () => shareThis("Jízda " + $("hTitle").textContent, location.href);
+
+/* ------------------------------ installing ---------------------------- */
+
+/* The shell is cached so the page opens at the track without waiting on a
+ * signal, and so a deploy can never pair a new app.js with a stale style.css.
+ * Secure context only, which on GitHub Pages means always. */
+if ("serviceWorker" in navigator && window.isSecureContext) {
+  addEventListener("load", () => {
+    navigator.serviceWorker.register("sw.js").then((reg) => {
+      reg.addEventListener("updatefound", () => {
+        const sw = reg.installing;
+        if (!sw) return;
+        sw.addEventListener("statechange", () => {
+          // A worker that installs while another already controls the page is a
+          // new version waiting, not a first install.
+          if (sw.state === "installed" && navigator.serviceWorker.controller)
+            toast("Nová verze je stažená — projeví se po obnovení.");
+        });
+      });
+    }).catch(() => { /* unregistered, blocked, or a file:// open */ });
+  });
+}
+
 /* ------------------------------- wiring ------------------------------ */
 
+importFavs();
+renderFavPanel();
 readUrl();
 writeUrl(false);
 applyView();
