@@ -41,9 +41,8 @@
   </div>
 
   <div class="pad keypanel hide" id="keyPanel">
-    <label><span>Base64 klíč, nebo rovnou celý odkaz na modul</span>
-      <input id="keyInput" class="mono"></label>
-    <p class="hint">Odkaz na jakýkoli SMS-Timing modul — klíč si z něj vytáhnu sám.</p>
+    <label><span>Odkaz na modul</span>
+      <input id="keyInput" class="mono" placeholder="https://…?key=…"></label>
     <div class="note bad hide" id="keyErr"></div>
     <div class="row">
       <button class="go quiet" id="keyApply">Použít</button>
@@ -114,10 +113,7 @@
         <label><span>Od</span><input type="date" id="dFrom"></label>
         <label><span>Do včetně</span><input type="date" id="dTo"></label>
       </div>
-      <div class="sizes">
-        <span class="sizes-label">Jeden řádek</span>
-        <div class="row" id="dSize"></div>
-      </div>
+      <div class="row" id="dSize"></div>
       <button class="go" id="dGo">Projet</button>
       <div class="note bad hide" id="dErr"></div>
     </div>
