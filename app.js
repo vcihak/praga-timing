@@ -34,6 +34,15 @@ const norm = (n) => String(n ?? "").replace(/\s+/g, " ").trim();
 
 const state = { rscId: "", resources: null, live: null, key: "" };
 
+/* A heat is the default: "which sessions did I drive" is the question people
+ * arrive with, and the coarse-to-fine scan made it cheap enough to ask without
+ * being asked to. */
+const SIZES = [
+  ["heat", "Po jízdách"], ["day", "Po dnech"], ["week", "Po týdnech"], ["month", "Po měsících"],
+];
+const SIZE_DEFAULT = "heat";
+
+
 /* ---------------------------- track time -----------------------------
  *
  * Every time in this app is track wall-clock, never the reader's. A phone in
@@ -106,7 +115,7 @@ function toSeconds(s) {
 
 async function connect() {
   const r = await fetch(HANDSHAKE, { headers: { Authorization: "Basic " + state.key } });
-  if (!r.ok) throw new Error("Handshake selhal (HTTP " + r.status + "). Zkontroluj klíč.");
+  if (!r.ok) throw new Error("Nepřipojil jsem se (HTTP " + r.status + "). Zkontroluj odkaz.");
   return r.json();
 }
 
@@ -120,7 +129,7 @@ async function api(conn, path, params) {
     // the moment the wording changed.
     const e = new Error(r.status === 401 || r.status === 403
       ? "Přihlášení vypršelo — zkouším znovu."
-      : path + ": HTTP " + r.status);
+      : "Nepodařilo se načíst data (HTTP " + r.status + ").");
     e.status = r.status;
     throw e;
   }
@@ -266,7 +275,7 @@ function setFavs(set) {
   renderFavPanel();
 }
 
-/* The group, as a thing you can look at and edit.
+/* Favourites, as a thing you can look at and edit.
  *
  * Starring people built a list that only existed as scattered gold stars in
  * whichever list you happened to be looking at: no way to see who was on it, no
@@ -278,8 +287,8 @@ function renderFavPanel() {
   if (!el) return;
   el.innerHTML = names.length
     ? names.map((n) => `<div class="favrow"><span class="who">${esc(n)}</span>
-        <button class="ghost" data-unfav="${esc(n)}" title="Odebrat ze skupiny">✕</button></div>`).join("")
-    : `<p class="hint">Zatím nikdo. Přidej jméno níž, nebo klepni na hvězdičku u kohokoli v seznamu.</p>`;
+        <button class="ghost" data-unfav="${esc(n)}" title="Odebrat">✕</button></div>`).join("")
+    : `<p class="hint">Zatím nikdo.</p>`;
   show($("dGroup"), names.length > 0);
 }
 
@@ -324,10 +333,10 @@ $("favClear").onclick = () => {
 
 $("favShare").onclick = () => {
   const names = [...favs().values()];
-  if (!names.length) return favNote("Skupina je prázdná.");
+  if (!names.length) return;
   const u = new URL(location.href);
   u.search = new URLSearchParams({ favs: names.join(",") }).toString();
-  shareThis("Moje skupina na Praga Timing", u.toString());
+  shareThis("Oblíbení na Praga Timing", u.toString());
 };
 
 function favNote(text) {
@@ -352,7 +361,7 @@ function importFavs() {
   try { history.replaceState({ app: 1 }, "", p.toString() ? "?" + p : location.pathname); } catch { /* opaque origin */ }
   if (added) {
     show($("groupPanel"), true);
-    favNote(`Přidáno ${added} ${added === 1 ? "jméno" : added < 5 ? "jména" : "jmen"} do skupiny.`);
+    favNote(`Přidáno ${added} ${added === 1 ? "jméno" : added < 5 ? "jména" : "jmen"}.`);
   }
 }
 
@@ -378,7 +387,7 @@ function renderList(el, rows, opts = {}) {
   if (favOnly) rows = rows.filter((r) => isFav(set, r.participant));
   if (!rows.length) {
     el.innerHTML = `<div class="empty">${favOnly
-      ? "Nikdo z oblíbených tu není. Označ lidi hvězdičkou v seznamu."
+      ? "Nikdo z oblíbených tu není."
       : "Nic tu není. Zkus širší rozsah."}</div>`;
     return;
   }
@@ -427,7 +436,7 @@ function wireList(el, repaint) {
 const DEFAULTS = () => ({
   tab: "best", scg: "", heat: "", who: "",
   from: today(), to: today(), clock: 0, ft: "00:00", tt: "23:59", max: 100, fav: 0, preset: 0,
-  q: "", df: mondayThisWeek(), dt: today(), sz: "day",
+  q: "", df: mondayThisWeek(), dt: today(), sz: SIZE_DEFAULT,
 });
 
 const PARAM = {
@@ -446,7 +455,7 @@ function readUrl() {
     view[k] = typeof d[k] === "number" ? (Number.isFinite(+raw) ? +raw : d[k]) : raw;
   }
   if (!["best", "driver", "live"].includes(view.tab)) view.tab = "best";
-  if (!SIZES.some(([v]) => v === view.sz)) view.sz = "day";
+  if (!SIZES.some(([v]) => v === view.sz)) view.sz = SIZE_DEFAULT;
   view.max = Math.min(500, Math.max(1, view.max || 100));
 }
 
@@ -504,7 +513,7 @@ function applyView() {
 
   setVal("dName", view.q); setVal("dFrom", view.df); setVal("dTo", view.dt);
   [...$("dSize").children].forEach((c) => (c.dataset.on = c.dataset.s === view.sz ? "1" : "0"));
-  updateHint();
+  updateDriverControls();
 
   if (!state.rscId) return;
 
@@ -554,9 +563,7 @@ async function boot() {
     state.rscId = "";
     $("trackName").textContent = "Nepřipojeno";
     $("trackSub").textContent = "";
-    $("bootMsg").textContent = e.message +
-      " Klíč Praga zveřejňuje v odkazu na registraci na pragaarena.cz — vezmi z něj parametr ?key= a vlož ho nahoře pod „klíč“." +
-      " Pokud jde o síťovou chybu, otevři stránku přes https, ne ze souboru.";
+    $("bootMsg").textContent = e.message;
     show($("bootErr"), true);
     // The advice is "paste a key", so open the place where you paste it.
     show($("keyPanel"), true);
@@ -648,7 +655,7 @@ function describeRange() {
   const r = apiRange();
   const cz = (d, t) => (/^\d{4}-\d{2}-\d{2}$/.test(d) ? d.split("-").reverse().map(Number).join(".") : "?")
     + (view.clock ? " " + t : "");
-  const text = `${cz(view.from, r.firstMinute)} — ${cz(view.to, r.lastMinute)} včetně`
+  const text = `${cz(view.from, r.firstMinute)} — ${cz(view.to, r.lastMinute)}`
     + (autoRefreshes() ? " · obnovuje se" : "");
   $("bWhat").textContent = text;
   $("bStickyWhat").textContent = text;
@@ -803,17 +810,14 @@ $("hBack").onclick = () => {
 
 /* ---------------------------- driver hunt ---------------------------- */
 
-const SIZES = [
-  ["heat", "Po jízdách"], ["day", "Po dnech"], ["week", "Po týdnech"], ["month", "Po měsících"],
-];
 $("dSize").innerHTML = SIZES.map(([v, l]) =>
-  `<button class="chip" data-s="${v}" data-on="${v === "day" ? 1 : 0}">${esc(l)}</button>`).join("");
+  `<button class="chip" data-s="${v}" data-on="${v === SIZE_DEFAULT ? 1 : 0}">${esc(l)}</button>`).join("");
 $("dSize").onclick = (e) => {
   const b = e.target.closest("[data-s]"); if (!b) return;
   view.sz = b.dataset.s;
   commit(false);
 };
-$("dName").addEventListener("input", updateHint);
+$("dName").addEventListener("input", updateDriverControls);
 for (const id of ["dFrom", "dTo", "dName"]) {
   $(id).addEventListener("change", () => {
     view.q = $("dName").value; view.df = $("dFrom").value; view.dt = $("dTo").value;
@@ -879,16 +883,9 @@ function idleScanButton() {
   $("dGo").textContent = "Projet";
 }
 
-function updateHint() {
-  const days = dayWindows($("dFrom").value, $("dTo").value).length;
-  const many = needlesFrom($("dName").value).length > 1
-    ? " Víc jmen nestojí víc dotazů — okno se stahuje celé a jména se hledají až tady."
-    : "";
-  $("dHint").textContent = (view.sz === "heat"
-    ? `Po jízdách projede nejdřív ${days} dní, pak jen v zasažených dnech tříhodinové bloky`
-      + ` a nakonec devítiminutová okna kolem nich — jemně se ptá jen tam, kde se jméno objevilo.`
-    : `API vrací jeden nejlepší čas na jezdce za dotázané okno, takže jemnější dělení znamená hustší historii a víc dotazů.`
-      + ` Teď ${buckets($("dFrom").value, $("dTo").value, view.sz).length}, po ${PARALLEL} současně.`) + many;
+// What the scan is doing is the scan's business; the button says how far it has
+// got while it runs, and that is the whole of what anybody wanted to know.
+function updateDriverControls() {
   show($("dClear"), !!$("dName").value.trim());
 }
 
@@ -940,7 +937,7 @@ $("dGo").onclick = async () => {
   const found = dFound = [];
   const seen = new Set();   // windows overlap by design now, so drop repeats
   const seeds = [];
-  let failed = 0, stage = "";
+  let failed = 0;
 
   scanNeedles = needles;
   const paint = () => paintDriver();
@@ -957,9 +954,8 @@ $("dGo").onclick = async () => {
 
   // One pass over a set of windows: collects matches and reports back which
   // windows contained any, so the next pass knows where to look closer.
-  async function probe(wins, label) {
+  async function probe(wins) {
     const hot = [];
-    let done = 0;
     await pool(wins, async (w) => {
       if (!alive()) return;
       let recs;
@@ -973,7 +969,7 @@ $("dGo").onclick = async () => {
         if (hit(r)) added++;
       }
       if (any) hot.push(w);
-      $("dGo").textContent = `Zastavit — ${label} ${++done}/${wins.length}, nalezeno ${found.length}`;
+      $("dGo").textContent = `Zastavit — nalezeno ${found.length}`;
       // Only repaint when something actually changed, otherwise it flickers.
       if (added) paint();
     });
@@ -983,16 +979,14 @@ $("dGo").onclick = async () => {
   try {
     if (view.sz !== "heat") {
       const wins = buckets($("dFrom").value, $("dTo").value, view.sz);
-      if (wins.length > FINE_CAP) throw new Error(`Přes ${FINE_CAP} kroků (${wins.length}). Zvol hrubší dělení nebo kratší rozsah.`);
-      await probe(wins, "okna");
+      if (wins.length > FINE_CAP) throw new Error("Moc dlouhý rozsah. Zkrať ho, nebo zvol Po týdnech či Po měsících.");
+      await probe(wins);
     } else {
-      stage = "dny";
-      const hotDays = await probe(dayWindows($("dFrom").value, $("dTo").value), "dny");
+      const hotDays = await probe(dayWindows($("dFrom").value, $("dTo").value));
       if (!alive()) return;
 
-      stage = "bloky";
       const hotBlocks = hotDays.length
-        ? await probe(hotDays.flatMap((d) => dayBlocks(d.day)), "bloky")
+        ? await probe(hotDays.flatMap((d) => dayBlocks(d.day)))
         : [];
       if (!alive()) return;
 
@@ -1001,9 +995,8 @@ $("dGo").onclick = async () => {
         ...seeds.map((t) => ({ a: addMin(t, -SEED_PAD), b: addMin(t, SEED_PAD) })),
       ]);
       const fine = tile(regions, HEAT_MINUTES);
-      if (fine.length > FINE_CAP) throw new Error(`Vyšlo z toho ${fine.length} jemných oken, což je moc. Zkrať rozsah.`);
-      stage = "jízdy";
-      if (fine.length) await probe(fine, "jízdy");
+      if (fine.length > FINE_CAP) throw new Error("Moc dlouhý rozsah. Zkrať ho, nebo zvol Po týdnech či Po měsících.");
+      if (fine.length) await probe(fine);
     }
 
     if (!alive()) return;
@@ -1012,7 +1005,7 @@ $("dGo").onclick = async () => {
     if (!found.length)
       $("dList").innerHTML = '<div class="empty">Nic. Jména jsou přezdívky z registrace, zkus kratší kus.</div>';
     else paint();
-    if (failed) fail(`${failed} oken se nepodařilo načíst${stage ? " (fáze " + stage + ")" : ""}; zbytek je výš.`);
+    if (failed) fail("Část dat se nepodařilo načíst, zbytek je níž.");
   } catch (e) {
     if (alive()) fail(e.message);
   } finally {
@@ -1403,28 +1396,17 @@ function onLiveMessage(raw) {
 let wakeLock = null;
 
 async function holdScreen() {
-  if (!("wakeLock" in navigator) || wakeLock || document.hidden || !LIVE.want) return wakeText();
+  if (!("wakeLock" in navigator) || wakeLock || document.hidden || !LIVE.want) return;
   try {
     wakeLock = await navigator.wakeLock.request("screen");
-    wakeLock.addEventListener("release", () => { wakeLock = null; wakeText(); });
+    wakeLock.addEventListener("release", () => { wakeLock = null; });
   } catch { wakeLock = null; }   // refused: low battery, policy, or no support
-  wakeText();
 }
 
 function dropScreen() {
   const w = wakeLock;
   wakeLock = null;
   if (w) w.release().catch(() => { /* already gone */ });
-  wakeText();
-}
-
-function wakeText() {
-  const on = LIVE.want && !!wakeLock;
-  const unsupported = LIVE.want && !("wakeLock" in navigator);
-  $("lWake").textContent = on ? "Displej zůstane rozsvícený, dokud jsi připojený."
-    : unsupported ? "Tenhle prohlížeč neumí držet displej rozsvícený — zhasne ti sám."
-    : "";
-  show($("lWake"), !!$("lWake").textContent);
 }
 
 $("lGo").onclick = () => {
@@ -1465,11 +1447,11 @@ function parseKey(raw) {
   const m = s.match(/[?&]key=([^&#\s]+)/);
   if (m) { try { s = decodeURIComponent(m[1]); } catch { s = m[1]; } }
   s = s.replace(/\s+/g, "");
-  if (!s) return { err: "Vlož klíč, nebo rovnou celý odkaz s ?key=…" };
+  if (!s) return { err: "Vlož odkaz na modul." };
   let decoded;
-  try { decoded = atob(s); } catch { return { err: "Tohle není base64. Zkopíruj hodnotu ?key= celou." }; }
+  try { decoded = atob(s); } catch { return { err: "Tomuhle nerozumím — vlož odkaz na modul." }; }
   if (!/^[^:]+:[0-9a-f-]{8,}$/i.test(decoded))
-    return { err: `Klíč se má dekódovat na clientKey:guid, tenhle se dekódoval na „${decoded.slice(0, 40)}“.` };
+    return { err: "Tohle není platný klíč." };
   return { key: s };
 }
 
