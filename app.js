@@ -277,7 +277,7 @@ function setFavs(set) {
   renderFavPanel();
 }
 
-/* The group, as a thing you can look at and edit.
+/* Favourites, as a thing you can look at and edit.
  *
  * Starring people built a list that only existed as scattered gold stars in
  * whichever list you happened to be looking at: no way to see who was on it, no
@@ -289,7 +289,7 @@ function renderFavPanel() {
   if (!el) return;
   el.innerHTML = names.length
     ? names.map((n) => `<div class="favrow"><span class="who">${esc(n)}</span>
-        <button class="ghost" data-unfav="${esc(n)}" title="Odebrat ze skupiny">✕</button></div>`).join("")
+        <button class="ghost" data-unfav="${esc(n)}" title="Odebrat">✕</button></div>`).join("")
     : `<p class="hint">Zatím nikdo.</p>`;
   show($("dGroup"), names.length > 0);
 }
@@ -335,10 +335,10 @@ $("favClear").onclick = () => {
 
 $("favShare").onclick = () => {
   const names = [...favs().values()];
-  if (!names.length) return favNote("Skupina je prázdná.");
+  if (!names.length) return;
   const u = new URL(location.href);
   u.search = new URLSearchParams({ favs: names.join(",") }).toString();
-  shareThis("Moje skupina na Praga Timing", u.toString());
+  shareThis("Oblíbení na Praga Timing", u.toString());
 };
 
 function favNote(text) {
@@ -363,7 +363,7 @@ function importFavs() {
   try { history.replaceState({ app: 1 }, "", p.toString() ? "?" + p : location.pathname); } catch { /* opaque origin */ }
   if (added) {
     show($("groupPanel"), true);
-    favNote(`Přidáno ${added} ${added === 1 ? "jméno" : added < 5 ? "jména" : "jmen"} do skupiny.`);
+    favNote(`Přidáno ${added} ${added === 1 ? "jméno" : added < 5 ? "jména" : "jmen"}.`);
   }
 }
 
@@ -389,7 +389,7 @@ function renderList(el, rows, opts = {}) {
   if (favOnly) rows = rows.filter((r) => isFav(set, r.participant));
   if (!rows.length) {
     el.innerHTML = `<div class="empty">${favOnly
-      ? "Nikdo z oblíbených tu není. Označ lidi hvězdičkou v seznamu."
+      ? "Nikdo z oblíbených tu není."
       : "Nic tu není. Zkus širší rozsah."}</div>`;
     return;
   }
