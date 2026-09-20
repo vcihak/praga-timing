@@ -27,10 +27,12 @@ const esc = (t) => String(t ?? "")
   .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
   .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 
-// The live feed pads names to a fixed width and the records API may not, so
-// both sides are squeezed through here before anything compares or stores
-// them. Otherwise starring somebody live would not star them on the board.
-const norm = (n) => String(n ?? "").replace(/\s+/g, " ").trim();
+/* A name is shown and stored exactly as it arrives — that string is the
+ * track's, not ours to tidy. Squeezing is for comparison only: the live feed
+ * pads names to a fixed width and the records API does not, so without a key
+ * that ignores the padding, starring somebody live would not star them on the
+ * board. Nothing but favKey and the grouping below may use it. */
+const squash = (n) => String(n ?? "").replace(/\s+/g, " ").trim();
 
 const state = { rscId: "", resources: null, live: null, key: "" };
 
@@ -243,7 +245,7 @@ function buckets(from, to, size) {
  * list this browser remembers. Names are the only handle the API gives — they
  * are registration nicknames, stable enough for an evening and for a season of
  * driving with the same people. */
-const favKey = (name) => norm(name).toLowerCase();
+const favKey = (name) => squash(name).toLowerCase();
 
 /* Stored as the names you actually typed, matched on a squashed lowercase key.
  * Keeping only the key meant the group panel listed "petra" — a list of your
@@ -255,7 +257,7 @@ function favs() {
   try { raw = JSON.parse(localStorage.getItem(FAVS) || "[]"); } catch { /* corrupt */ }
   const m = new Map();
   if (Array.isArray(raw)) for (const n of raw) {
-    const name = norm(n);
+    const name = String(n ?? "").trim();
     if (name) m.set(favKey(name), name);
   }
   return m;
@@ -264,7 +266,7 @@ function favs() {
 function toggleFav(name) {
   const set = favs(), k = favKey(name);
   if (!k) return;
-  set.has(k) ? set.delete(k) : set.set(k, norm(name));
+  set.has(k) ? set.delete(k) : set.set(k, String(name ?? "").trim());
   setFavs(set);
 }
 
@@ -302,7 +304,7 @@ $("favList").onclick = (e) => {
 };
 
 function addFav(raw) {
-  const name = norm(raw);
+  const name = String(raw ?? "").trim();
   if (!name) return;
   const set = favs();
   set.set(favKey(name), name);
@@ -353,7 +355,7 @@ function importFavs() {
   const set = favs();
   let added = 0;
   for (const n of raw.split(",")) {
-    const name = norm(n), k = favKey(name);
+    const name = String(n ?? "").trim(), k = favKey(name);
     if (k && !set.has(k)) { set.set(k, name); added++; }
   }
   setFavs(set);
@@ -361,7 +363,7 @@ function importFavs() {
   try { history.replaceState({ app: 1 }, "", p.toString() ? "?" + p : location.pathname); } catch { /* opaque origin */ }
   if (added) {
     show($("groupPanel"), true);
-    favNote(`Přidáno ${added} ${added === 1 ? "jméno" : added < 5 ? "jména" : "jmen"}.`);
+    favNote("Přidáno " + plural(added, "jméno", "jména", "jmen") + ".");
   }
 }
 
@@ -396,7 +398,7 @@ function renderList(el, rows, opts = {}) {
     // Ranking within a filtered list is renumbered, so a starred group reads
     // as its own leaderboard rather than as gaps in somebody else's.
     const rank = renumber || favOnly ? i + 1 : (r.position ?? i + 1);
-    const name = norm(r.participant);
+    const name = String(r.participant ?? "");
     const on = isFav(set, name);
     const w = wall(r.date);
     const when = plainWhen
@@ -897,10 +899,10 @@ function updateDriverControls() {
  * block is hot if anyone in the group was in it; that is the honest cost of the
  * question and it is still far under a flat grid. */
 const needlesFrom = (text) => [...new Set(
-  String(text || "").split(",").map((n) => norm(n).toLowerCase()).filter(Boolean))];
+  String(text || "").split(",").map((n) => squash(n).toLowerCase()).filter(Boolean))];
 
 const matches = (name, needles) => {
-  const n = norm(name).toLowerCase();
+  const n = squash(name).toLowerCase();
   return needles.some((x) => n.includes(x));
 };
 
@@ -943,7 +945,7 @@ $("dGo").onclick = async () => {
   const paint = () => paintDriver();
 
   const hit = (r) => {
-    const k = norm(r.participant) + "|" + r.date + "|" + r.score;
+    const k = favKey(r.participant) + "|" + r.date + "|" + r.score;
     if (seen.has(k)) return false;
     seen.add(k);
     found.push({ ...r, secs: toSeconds(r.score) });
@@ -1018,17 +1020,26 @@ $("dGo").onclick = async () => {
  * is a colour that tells you nothing. */
 let scanNeedles = [];
 
+/* Two drivers are the same driver when their keys match; the label is whatever
+ * the track spelled the first time we saw them, untouched. */
 function seriesOrder(rows) {
-  const names = [...new Set(rows.map((r) => norm(r.participant)))];
-  const rank = (n) => {
-    const i = scanNeedles.findIndex((x) => n.toLowerCase().includes(x));
+  const label = new Map();
+  for (const r of rows) {
+    const k = favKey(r.participant);
+    if (k && !label.has(k)) label.set(k, String(r.participant ?? ""));
+  }
+  const rank = (k) => {
+    const i = scanNeedles.findIndex((x) => k.includes(x));
     return i < 0 ? scanNeedles.length : i;
   };
-  return names.sort((a, b) => rank(a) - rank(b) || a.localeCompare(b, "cs"));
+  const keys = [...label.keys()].sort((a, b) =>
+    rank(a) - rank(b) || label.get(a).localeCompare(label.get(b), "cs"));
+  keys.label = (k) => label.get(k) ?? k;
+  return keys;
 }
 
 const colorOf = (order) => (name) => {
-  const i = order.indexOf(norm(name));
+  const i = order.indexOf(favKey(name));
   return i >= 0 && i < SERIES.length ? SERIES[i] : "";
 };
 
@@ -1068,7 +1079,7 @@ function trend(el, pts) {
   const order = seriesOrder(pts);
   const shown = order.slice(0, MAX_SERIES);
   const multi = order.length > 1;
-  const rows = pts.filter((p) => !multi || shown.includes(norm(p.participant)));
+  const rows = pts.filter((p) => !multi || shown.includes(favKey(p.participant)));
   if (rows.length < 2) { el.innerHTML = ""; return; }
 
   // One x per session across everybody, so two drivers in the same heat sit in
@@ -1100,11 +1111,12 @@ function trend(el, pts) {
 
   const paint = colorOf(order);
   const best = Math.min(...rows.map((p) => p.secs));
-  const series = (multi ? shown : [order[0]]).map((name, i) => {
-    const mine = rows.filter((p) => norm(p.participant) === name)
+  const series = (multi ? shown : [order[0]]).map((key, i) => {
+    const name = order.label(key);
+    const mine = rows.filter((p) => favKey(p.participant) === key)
       .sort((a, b) => wall(a.date) - wall(b.date));
     if (!mine.length) return "";
-    const stroke = multi ? paint(name) : "var(--accent)";
+    const stroke = multi ? SERIES[order.indexOf(key)] : "var(--accent)";
     const path = mine.map((p, j) => (j ? "L" : "M") + x(p.date).toFixed(1) + "," + y(p.secs).toFixed(1)).join(" ");
     const last = mine[mine.length - 1];
     // Direct labels while there is room for them, so identity is never colour
@@ -1121,8 +1133,8 @@ function trend(el, pts) {
   }).join("");
 
   const taps = rows.map((p) => `<circle class="tap" cx="${x(p.date).toFixed(1)}" cy="${y(p.secs).toFixed(1)}"
-     r="11" fill="transparent" data-at="${esc(p.date)}" data-who="${esc(norm(p.participant))}"
-     ><title>${esc(norm(p.participant))} · ${esc(czDate(p.date))} · ${esc(p.score)}</title></circle>`).join("");
+     r="11" fill="transparent" data-at="${esc(p.date)}" data-who="${esc(p.participant)}"
+     ><title>${esc(p.participant)} · ${esc(czDate(p.date))} · ${esc(p.score)}</title></circle>`).join("");
 
   el.innerHTML = `<svg viewBox="0 0 ${CH.w} ${CH.h}" preserveAspectRatio="xMidYMid meet" role="img"
       aria-label="Vývoj časů, nejlepší ${best.toFixed(3)} s">
@@ -1134,7 +1146,7 @@ function trend(el, pts) {
   // A legend whenever there is more than one line; a single line is named by
   // the field you typed it into.
   $("dLegend").innerHTML = multi
-    ? shown.map((n) => `<span class="legend-item"><span class="swatch" style="background:${paint(n)}"></span>${esc(n)}</span>`).join("")
+    ? shown.map((k) => `<span class="legend-item"><span class="swatch" style="background:${SERIES[order.indexOf(k)]}"></span>${esc(order.label(k))}</span>`).join("")
       + (order.length > shown.length
         ? `<span class="legend-item more">+${order.length - shown.length} dalších v seznamu níž</span>` : "")
     : "";
@@ -1170,6 +1182,10 @@ function lap(ms) {
 // "01.043" -> "+1.043", "" -> "" (the leader has no gap)
 const gap = (g) => (g ? "+" + String(g).replace(/^0+(?=\d)/, "") : "");
 
+/* Czech counts in three: 1 kolo, 2-4 kola, 5+ kol. The favourites panel
+ * already got this right for jméno/jména/jmen; the lap counter did not. */
+const plural = (n, one, few, many) => n + " " + (n === 1 ? one : n < 5 ? few : many);
+
 function clock(ms) {
   if (ms == null || ms < 0) return "—";
   const t = Math.floor(ms / 1000);
@@ -1187,7 +1203,7 @@ function renderLive(d, ended) {
   $("lName").textContent = d.N || "Jízda";
   // Laps-limited heats count laps, timed ones count down; show whichever the
   // heat is actually being run to.
-  $("lClock").textContent = d.L > 0 ? d.L + " kol" : clock(d.C);
+  $("lClock").textContent = d.L > 0 ? plural(d.L, "kolo", "kola", "kol") : clock(d.C);
   $("lSub").textContent = [
     drivers.length ? drivers.length + " na trati" : "",
     running ? "" : "dojeto",
@@ -1214,11 +1230,17 @@ function renderLive(d, ended) {
       : r.T === fastest ? "purple"
       : r.T === r.B ? "green"
       : "yellow";
-    const name = norm(r.N);
-    // An anonymous driver is named after the kart, so the badge would print
-    // the same number twice.
-    const badge = r.K && !name.endsWith(" " + r.K)
-      ? `<span class="kart">${esc(r.K)}</span>` : "";
+    const name = String(r.N ?? "");
+    /* Always, whenever the feed sends one.
+     *
+     * This used to hide the badge when the name ended with the kart number, on
+     * the theory that "Jezdec 8" in kart 8 would print the 8 twice. But a
+     * public session is a field of Jezdec 1..8 mostly sitting in the kart of
+     * the same number, so the rule blanked nearly every row and left a badge
+     * only on the two drivers whose kart happened not to match their name. In
+     * a column headed Kart, an empty cell reads as "the feed did not say",
+     * which is a worse lie than repeating a digit. */
+    const badge = r.K ? `<span class="kart">${esc(r.K)}</span>` : "";
     const on = isFav(set, name);
     return `<tr data-mark="${mark}" data-fav="${on ? 1 : 0}" data-alert="${alerting(name) ? 1 : 0}">
       <td class="c-pos"><span class="poscell">
@@ -1249,7 +1271,7 @@ function alertOnPurple(drivers, fastest, set, heatName) {
   if (heatName && heatName !== ALERT.heat) { ALERT.heat = heatName; ALERT.at.clear(); ALERT.seen = new Map(); }
   ALERT.seen ||= new Map();
   for (const r of drivers) {
-    const name = norm(r.N);
+    const name = r.N;
     if (!r.T || r.L < 2 || r.T !== fastest || !isFav(set, name)) continue;
     const k = favKey(name);
     if (ALERT.seen.get(k) === r.T) continue;
