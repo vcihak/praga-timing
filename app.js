@@ -361,7 +361,7 @@ function importFavs() {
   try { history.replaceState({ app: 1 }, "", p.toString() ? "?" + p : location.pathname); } catch { /* opaque origin */ }
   if (added) {
     show($("groupPanel"), true);
-    favNote(`Přidáno ${added} ${added === 1 ? "jméno" : added < 5 ? "jména" : "jmen"}.`);
+    favNote("Přidáno " + plural(added, "jméno", "jména", "jmen") + ".");
   }
 }
 
@@ -1170,10 +1170,24 @@ function lap(ms) {
 // "01.043" -> "+1.043", "" -> "" (the leader has no gap)
 const gap = (g) => (g ? "+" + String(g).replace(/^0+(?=\d)/, "") : "");
 
+/* Czech counts in three: 1 kolo, 2-4 kola, 5+ kol. The favourites panel
+ * already got this right for jméno/jména/jmen; the lap counter did not. */
+const plural = (n, one, few, many) => n + " " + (n === 1 ? one : n < 5 ? few : many);
+
 function clock(ms) {
   if (ms == null || ms < 0) return "—";
   const t = Math.floor(ms / 1000);
   return Math.floor(t / 60) + ":" + String(t % 60).padStart(2, "0");
+}
+
+/* Heats come through named either way: "Jízda 14" one session, "[HEAT] 15 -
+ * Detska" the next. The bracketed tag is the timing system labelling its own
+ * record type; what follows it is the name people use. Strip the tag only when
+ * something is left over, so a heat called nothing but "[HEAT]" still says it.
+ */
+function heatName(n) {
+  const name = norm(n).replace(/^\[[^\]]*\]\s*[-–—]?\s*/, "");
+  return name || norm(n) || "Jízda";
 }
 
 function renderLive(d, ended) {
@@ -1184,10 +1198,10 @@ function renderLive(d, ended) {
   const running = !ended && d.S === 1 && drivers.length > 0;
 
   $("lHead").dataset.live = running ? "1" : "0";
-  $("lName").textContent = d.N || "Jízda";
+  $("lName").textContent = heatName(d.N);
   // Laps-limited heats count laps, timed ones count down; show whichever the
   // heat is actually being run to.
-  $("lClock").textContent = d.L > 0 ? d.L + " kol" : clock(d.C);
+  $("lClock").textContent = d.L > 0 ? plural(d.L, "kolo", "kola", "kol") : clock(d.C);
   $("lSub").textContent = [
     drivers.length ? drivers.length + " na trati" : "",
     running ? "" : "dojeto",
