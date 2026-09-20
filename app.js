@@ -1215,10 +1215,16 @@ function renderLive(d, ended) {
       : r.T === r.B ? "green"
       : "yellow";
     const name = norm(r.N);
-    // An anonymous driver is named after the kart, so the badge would print
-    // the same number twice.
-    const badge = r.K && !name.endsWith(" " + r.K)
-      ? `<span class="kart">${esc(r.K)}</span>` : "";
+    /* Always, whenever the feed sends one.
+     *
+     * This used to hide the badge when the name ended with the kart number, on
+     * the theory that "Jezdec 8" in kart 8 would print the 8 twice. But a
+     * public session is a field of Jezdec 1..8 mostly sitting in the kart of
+     * the same number, so the rule blanked nearly every row and left a badge
+     * only on the two drivers whose kart happened not to match their name. In
+     * a column headed Kart, an empty cell reads as "the feed did not say",
+     * which is a worse lie than repeating a digit. */
+    const badge = r.K ? `<span class="kart">${esc(r.K)}</span>` : "";
     const on = isFav(set, name);
     return `<tr data-mark="${mark}" data-fav="${on ? 1 : 0}" data-alert="${alerting(name) ? 1 : 0}">
       <td class="c-pos"><span class="poscell">
