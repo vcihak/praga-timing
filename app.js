@@ -494,8 +494,30 @@ addEventListener("popstate", () => { pushedHeat = false; readUrl(); applyView();
 
 const setVal = (id, v) => { if ($(id).value !== String(v)) $(id).value = String(v); };
 
+/* Pitwall keeps these same heats, lap by lap and kart by kart, behind a login.
+ * One quiet link out to what is on screen here: the heat that is open, the
+ * driver looked up, or the karts. Only for Praga — another centre's key has
+ * nothing there — and in a new tab, so the timing here keeps running. */
+const PITWALL = "https://pitwall.cihakvoj.tech/#/center/smstiming-pragaarena";
+const anonymous = (n) => /^jezdec\s*\d+$/i.test(squash(n));
+
+function pitwallHref() {
+  if (view.heat) {
+    const who = squash(view.who);
+    return `${PITWALL}/heats/at/${encodeURIComponent(view.heat)}${who ? "/" + encodeURIComponent(who) : ""}`;
+  }
+  const names = String(view.q ?? "").split(",").map(squash).filter(Boolean);
+  if (view.tab === "driver" && names.length === 1 && !anonymous(names[0])) {
+    return `${PITWALL}/drivers/${encodeURIComponent(names[0])}`;
+  }
+  return `${PITWALL}/karts`;
+}
+
 function applyView() {
   const onHeat = !!view.heat;
+
+  $("toPitwall").href = pitwallHref();
+  show($("toPitwall"), !state.key || state.key === DEFAULT_KEY);
 
   [...$("tabs").children].forEach((b) => b.setAttribute("aria-selected", String(b.dataset.tab === view.tab)));
   show($("tabs"), !onHeat && !!state.rscId);

@@ -26,6 +26,7 @@ h1{font-size:19px;font-weight:500;margin:0;letter-spacing:-.01em}
 button{font:inherit;cursor:pointer}
 .ghost{background:none;border:1px solid var(--line);color:var(--dim);
   border-radius:999px;padding:5px 12px;font-size:12px}
+a.ghost{text-decoration:none;display:inline-block}
 nav{display:flex;border-bottom:1px solid var(--line)}
 nav button{flex:1;background:none;border:none;border-bottom:2px solid transparent;
   color:var(--dim);padding:13px 0;font-size:14px}
