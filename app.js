@@ -516,8 +516,12 @@ function pitwallHref() {
 function applyView() {
   const onHeat = !!view.heat;
 
-  $("toPitwall").href = pitwallHref();
-  show($("toPitwall"), !state.key || state.key === DEFAULT_KEY);
+  // Absent from a page cached before the link existed; that page must still run.
+  const toPitwall = $("toPitwall");
+  if (toPitwall) {
+    toPitwall.href = pitwallHref();
+    show(toPitwall, !state.key || state.key === DEFAULT_KEY);
+  }
 
   [...$("tabs").children].forEach((b) => b.setAttribute("aria-selected", String(b.dataset.tab === view.tab)));
   show($("tabs"), !onHeat && !!state.rscId);
@@ -1574,8 +1578,9 @@ $("hShare").onclick = () => shareThis("Jízda " + $("hTitle").textContent, locat
 /* ------------------------------ installing ---------------------------- */
 
 /* The shell is cached so the page opens at the track without waiting on a
- * signal, and so a deploy can never pair a new app.js with a stale style.css.
- * Secure context only, which on GitHub Pages means always. */
+ * signal, and as one set, so a deploy can never pair a new app.js with a stale
+ * index.html (see sw.js). Secure context only, which on GitHub Pages means
+ * always. */
 if ("serviceWorker" in navigator && window.isSecureContext) {
   addEventListener("load", () => {
     navigator.serviceWorker.register("sw.js").then((reg) => {
